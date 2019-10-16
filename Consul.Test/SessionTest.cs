@@ -17,14 +17,26 @@
 // -----------------------------------------------------------------------
 
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
 namespace Consul.Test
 {
-    public class SessionTest
+    public class SessionTest : IDisposable
     {
+        AsyncReaderWriterLock.Releaser m_lock;
+        public SessionTest()
+        {
+            m_lock = AsyncHelpers.RunSync(() => SelectiveParallel.Parallel());
+        }
+
+        public void Dispose()
+        {
+            m_lock.Dispose();
+        }
+    
         [Fact]
         public async Task Session_CreateDestroy()
         {
@@ -218,7 +230,7 @@ namespace Consul.Test
 
                 var nodeRequest = await client.Session.Node(infoRequest.Response.Node);
 
-                Assert.Equal(1, nodeRequest.Response.Length);
+                Assert.Contains(sessionRequest.Response, nodeRequest.Response.Select(s => s.ID));
                 Assert.NotEqual((ulong)0, nodeRequest.LastIndex);
                 Assert.True(nodeRequest.KnownLeader);
             }
@@ -242,7 +254,7 @@ namespace Consul.Test
             {
                 var listRequest = await client.Session.List();
 
-                Assert.Equal(1, listRequest.Response.Length);
+                Assert.Contains(sessionRequest.Response, listRequest.Response.Select(s => s.ID));
                 Assert.NotEqual((ulong)0, listRequest.LastIndex);
                 Assert.True(listRequest.KnownLeader);
             }

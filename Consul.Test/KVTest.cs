@@ -18,7 +18,9 @@
 
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,13 +28,25 @@ using Xunit;
 
 namespace Consul.Test
 {
-    public class KVTest
+    public class KVTest : IDisposable
     {
-        private static readonly Random Random = new Random((int)DateTime.Now.Ticks);
+        AsyncReaderWriterLock.Releaser m_lock;
+        public KVTest()
+        {
+            m_lock = AsyncHelpers.RunSync(() => SelectiveParallel.Parallel());
+        }
+
+        public void Dispose()
+        {
+            m_lock.Dispose();
+        }
+    
+        private static readonly Random Random = new Random();
 
         internal static string GenerateTestKeyName()
         {
             var keyChars = new char[16];
+
             for (var i = 0; i < keyChars.Length; i++)
             {
                 keyChars[i] = Convert.ToChar(Random.Next(65, 91));
@@ -225,7 +239,7 @@ namespace Consul.Test
 #pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
             Task.Run(async () =>
             {
-                Task.Delay(1100).Wait();
+                await Task.Delay(100);
                 var p = new KVPair(key) { Flags = 42, Value = value };
                 var putResponse = await client.KV.Put(p);
                 Assert.True(putResponse.Response);
@@ -233,7 +247,12 @@ namespace Consul.Test
 #pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
 
             var getRequest2 = await client.KV.Get(key, new QueryOptions() { WaitIndex = getRequest.LastIndex });
-            var res = getRequest2.Response;
+            KVPair res = null;
+            while (getRequest2.Response == null)
+            {
+                getRequest2 = await client.KV.Get(key, new QueryOptions() { WaitIndex = getRequest2.LastIndex });
+            }
+            res = getRequest2.Response;
 
             Assert.NotNull(res);
             Assert.True(StructuralComparisons.StructuralEqualityComparer.Equals(value, res.Value));
@@ -264,7 +283,10 @@ namespace Consul.Test
 
                 try
                 {
-                    getRequest = await client.KV.Get(key, new QueryOptions() { WaitIndex = getRequest.LastIndex }, cts.Token);
+                    while (!cts.IsCancellationRequested)
+                    {
+                        getRequest = await client.KV.Get(key, new QueryOptions() { WaitIndex = getRequest.LastIndex }, cts.Token);
+                    }
                     Assert.True(false, "A cancellation exception was not thrown when one was expected.");
                 }
                 catch (TaskCanceledException ex)
@@ -289,7 +311,7 @@ namespace Consul.Test
 #pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
             Task.Run(async () =>
             {
-                Thread.Sleep(100);
+                await Task.Delay(100);
                 var p = new KVPair(prefix) { Flags = 42, Value = value };
                 var putRes = await client.KV.Put(p);
                 Assert.True(putRes.Response);
@@ -297,6 +319,12 @@ namespace Consul.Test
 #pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
 
             var pairs2 = await client.KV.List(prefix, new QueryOptions() { WaitIndex = pairs.LastIndex });
+
+            while (pairs2.Response == null)
+            {
+                pairs2 = await client.KV.List(prefix, new QueryOptions() { WaitIndex = pairs2.LastIndex });
+            }
+
             Assert.NotNull(pairs2.Response);
             Assert.Equal(pairs2.Response.Length, 1);
             Assert.True(StructuralComparisons.StructuralEqualityComparer.Equals(value, pairs2.Response[0].Value));
@@ -324,7 +352,10 @@ namespace Consul.Test
 
                 try
                 {
-                    pairs = await client.KV.List(prefix, new QueryOptions() { WaitIndex = pairs.LastIndex }, cts.Token);
+                    while (!cts.IsCancellationRequested)
+                    {
+                        pairs = await client.KV.List(prefix, new QueryOptions() { WaitIndex = pairs.LastIndex }, cts.Token);
+                    }
                     Assert.True(false, "A cancellation exception was not thrown when one was expected.");
                 }
                 catch (TaskCanceledException ex)
@@ -406,6 +437,93 @@ namespace Consul.Test
 
             var deleteRequest = await client.KV.Delete(key);
             Assert.True(deleteRequest.Response);
+        }
+
+        [Fact]
+        public async Task KV_Txn()
+        {
+
+
+            using (var client = new ConsulClient())
+            {
+                string id = string.Empty;
+
+                try
+                {
+                    id = (await client.Session.CreateNoChecks()).Response;
+
+                    var keyName = GenerateTestKeyName();
+                    var keyValue = Encoding.UTF8.GetBytes("test");
+
+                    var txn = new List<KVTxnOp> {
+                        new KVTxnOp(keyName, KVTxnVerb.Lock) { Value = keyValue },
+                        new KVTxnOp(keyName, KVTxnVerb.Get)
+                    };
+
+                    var result = await client.KV.Txn(txn);
+
+                    Assert.False(result.Response.Success, "transaction should have failed");
+                    Assert.Equal(2, result.Response.Errors.Count);
+                    Assert.Equal(0, result.Response.Results.Count);
+
+                    Assert.Equal(0, result.Response.Errors[0].OpIndex);
+                    Assert.Contains("missing session", result.Response.Errors[0].What);
+                    Assert.Contains("doesn't exist", result.Response.Errors[1].What);
+
+                    // Now poke in a real session and try again.
+                    txn[0].Session = id;
+
+                    result = await client.KV.Txn(txn);
+
+                    Assert.True(result.Response.Success, "transaction failure");
+                    Assert.Equal(0, result.Response.Errors.Count);
+                    Assert.Equal(2, result.Response.Results.Count);
+
+
+                    for (int i = 0; i < result.Response.Results.Count; i++)
+                    {
+                        byte[] expected = null;
+                        if (i == 1) { expected = keyValue; }
+
+                        var item = result.Response.Results[i];
+
+                        Assert.Equal(keyName, item.Key);
+                        Assert.Equal(expected, item.Value);
+                        Assert.Equal(1ul, item.LockIndex);
+                        Assert.Equal(id, item.Session);
+                    }
+
+                    // Run a read-only transaction.
+                    txn = new List<KVTxnOp> {
+                        new KVTxnOp(keyName, KVTxnVerb.Get)
+                    };
+
+                    result = await client.KV.Txn(txn);
+
+                    Assert.True(result.Response.Success, "transaction failure");
+                    Assert.Equal(0, result.Response.Errors.Count);
+                    Assert.Equal(1, result.Response.Results.Count);
+
+                    var getResult = result.Response.Results[0];
+
+                    Assert.Equal(keyName, getResult.Key);
+                    Assert.Equal(keyValue, getResult.Value);
+                    Assert.Equal(1ul, getResult.LockIndex);
+                    Assert.Equal(id, getResult.Session);
+
+                    // Sanity check using the regular GET API.
+                    var pair = await client.KV.Get(keyName);
+
+                    Assert.NotNull(pair.Response);
+                    Assert.Equal(1ul, pair.Response.LockIndex);
+                    Assert.Equal(id, pair.Response.Session);
+                    Assert.NotEqual(0ul, pair.LastIndex);
+                }
+                finally
+                {
+                    await client.Session.Destroy(id);
+                }
+            }
         }
     }
 }

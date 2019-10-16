@@ -16,12 +16,106 @@
 //  </copyright>
 // -----------------------------------------------------------------------
 
+using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace Consul
 {
+    /// <summary>
+    /// The status of a health check
+    /// </summary>
+    public class HealthStatus : IEquatable<HealthStatus>
+    {
+        private static readonly HealthStatus passing = new HealthStatus() { Status = "passing" };
+        private static readonly HealthStatus warning = new HealthStatus() { Status = "warning" };
+        private static readonly HealthStatus critical = new HealthStatus() { Status = "critical" };
+        private static readonly HealthStatus maintenance = new HealthStatus() { Status = "maintenance" };
+        private static readonly HealthStatus any = new HealthStatus() { Status = "any" };
+
+        public const string NodeMaintenance = "_node_maintenance";
+        public const string ServiceMaintenancePrefix = "_service_maintenance:";
+
+        public string Status { get; private set; }
+
+        public static HealthStatus Passing
+        {
+            get { return passing; }
+        }
+
+        public static HealthStatus Warning
+        {
+            get { return warning; }
+        }
+
+        public static HealthStatus Critical
+        {
+            get { return critical; }
+        }
+
+        public static HealthStatus Maintenance
+        {
+            get { return maintenance; }
+        }
+
+        public static HealthStatus Any
+        {
+            get { return any; }
+        }
+
+        public bool Equals(HealthStatus other)
+        {
+            return other != null && ReferenceEquals(this, other);
+        }
+
+        public override bool Equals(object other)
+        {
+            // other could be a reference type, the is operator will return false if null
+            return other is HealthStatus && Equals(other as HealthStatus);
+        }
+
+        public override int GetHashCode()
+        {
+            return Status.GetHashCode();
+        }
+    }
+
+    public class HealthStatusConverter : JsonConverter
+    {
+        public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
+        {
+            serializer.Serialize(writer, ((HealthStatus)value).Status);
+        }
+
+        public override object ReadJson(JsonReader reader, Type objectType, object existingValue,
+            JsonSerializer serializer)
+        {
+            var status = (string)serializer.Deserialize(reader, typeof(string));
+            switch (status)
+            {
+                case "passing":
+                    return HealthStatus.Passing;
+                case "warning":
+                    return HealthStatus.Warning;
+                case "critical":
+                    return HealthStatus.Critical;
+                default:
+                    throw new ArgumentException("Invalid Check status value during deserialization");
+            }
+        }
+
+        public override bool CanConvert(Type objectType)
+        {
+            if (objectType == typeof(HealthStatus))
+            {
+                return true;
+            }
+            return false;
+        }
+    }
+
     /// <summary>
     /// HealthCheck is used to represent a single check
     /// </summary>
@@ -30,11 +124,59 @@ namespace Consul
         public string Node { get; set; }
         public string CheckID { get; set; }
         public string Name { get; set; }
-        public string Status { get; set; }
+        [JsonConverter(typeof(HealthStatusConverter))]
+        public HealthStatus Status { get; set; }
         public string Notes { get; set; }
         public string Output { get; set; }
         public string ServiceID { get; set; }
         public string ServiceName { get; set; }
+    }
+
+    public static class HealthCheckExtension
+    {
+        public static HealthStatus AggregatedStatus(this IEnumerable<HealthCheck> checks)
+        {
+            if (checks == null)
+            {
+                return HealthStatus.Passing;
+            }
+
+            bool warning = false, critical = false, maintenance = false;
+            foreach (var check in checks)
+            {
+                if (!string.IsNullOrEmpty(check.CheckID) &&
+                    (check.CheckID == HealthStatus.NodeMaintenance || check.CheckID.StartsWith(HealthStatus.ServiceMaintenancePrefix)))
+                {
+                    maintenance = true;
+                    break;
+                }
+                else if (check.Status == HealthStatus.Critical)
+                {
+                    critical = true;
+                }
+                else if (check.Status == HealthStatus.Warning)
+                {
+                    warning = true;
+                }
+            }
+
+            if (maintenance)
+            {
+                return HealthStatus.Maintenance;
+            }
+            else if (critical)
+            {
+                return HealthStatus.Critical;
+            }
+            else if (warning)
+            {
+                return HealthStatus.Warning;
+            }
+            else
+            {
+                return HealthStatus.Passing;
+            }
+        }
     }
 
     /// <summary>
@@ -64,19 +206,9 @@ namespace Consul
         /// </summary>
         /// <param name="service">The service ID</param>
         /// <returns>A query result containing the health checks matching the provided service ID, or a query result with a null response if no service matched the provided ID</returns>
-        public Task<QueryResult<HealthCheck[]>> Checks(string service)
+        public Task<QueryResult<HealthCheck[]>> Checks(string service, CancellationToken ct = default(CancellationToken))
         {
-            return Checks(service, QueryOptions.Default, CancellationToken.None);
-        }
-
-        /// <summary>
-        /// Checks is used to return the checks associated with a service
-        /// </summary>
-        /// <param name="service">The service ID</param>
-        /// <returns>A query result containing the health checks matching the provided service ID, or a query result with a null response if no service matched the provided ID</returns>
-        public Task<QueryResult<HealthCheck[]>> Checks(string service, QueryOptions q)
-        {
-            return Checks(service, q, CancellationToken.None);
+            return Checks(service, QueryOptions.Default, ct);
         }
 
         /// <summary>
@@ -86,7 +218,7 @@ namespace Consul
         /// <param name="q">Customized query options</param>
         /// <param name="ct">Cancellation token for long poll request. If set, OperationCanceledException will be thrown if the request is cancelled before completing</param>
         /// <returns>A query result containing the health checks matching the provided service ID, or a query result with a null response if no service matched the provided ID</returns>
-        public Task<QueryResult<HealthCheck[]>> Checks(string service, QueryOptions q, CancellationToken ct)
+        public Task<QueryResult<HealthCheck[]>> Checks(string service, QueryOptions q, CancellationToken ct = default(CancellationToken))
         {
             return _client.Get<HealthCheck[]>(string.Format("/v1/health/checks/{0}", service), q).Execute(ct);
         }
@@ -96,19 +228,9 @@ namespace Consul
         /// </summary>
         /// <param name="node">The node name</param>
         /// <returns>A query result containing the health checks matching the provided node ID, or a query result with a null response if no node matched the provided ID</returns>
-        public Task<QueryResult<HealthCheck[]>> Node(string node)
+        public Task<QueryResult<HealthCheck[]>> Node(string node, CancellationToken ct = default(CancellationToken))
         {
-            return Node(node, QueryOptions.Default, CancellationToken.None);
-        }
-
-        /// <summary>
-        /// Node is used to query for checks belonging to a given node
-        /// </summary>
-        /// <param name="node">The node name</param>
-        /// <returns>A query result containing the health checks matching the provided node ID, or a query result with a null response if no node matched the provided ID</returns>
-        public Task<QueryResult<HealthCheck[]>> Node(string node, QueryOptions q)
-        {
-            return Node(node, q, CancellationToken.None);
+            return Node(node, QueryOptions.Default, ct);
         }
 
         /// <summary>
@@ -118,7 +240,7 @@ namespace Consul
         /// <param name="q">Customized query options</param>
         /// <param name="ct">Cancellation token for long poll request. If set, OperationCanceledException will be thrown if the request is cancelled before completing</param>
         /// <returns>A query result containing the health checks matching the provided node ID, or a query result with a null response if no node matched the provided ID</returns>
-        public Task<QueryResult<HealthCheck[]>> Node(string node, QueryOptions q, CancellationToken ct)
+        public Task<QueryResult<HealthCheck[]>> Node(string node, QueryOptions q, CancellationToken ct = default(CancellationToken))
         {
             return _client.Get<HealthCheck[]>(string.Format("/v1/health/node/{0}", node), q).Execute(ct);
         }
@@ -128,9 +250,9 @@ namespace Consul
         /// </summary>
         /// <param name="service">The service ID</param>
         /// <returns>A query result containing the service members matching the provided service ID, or a query result with a null response if no service members matched the filters provided</returns>
-        public Task<QueryResult<ServiceEntry[]>> Service(string service)
+        public Task<QueryResult<ServiceEntry[]>> Service(string service, CancellationToken ct = default(CancellationToken))
         {
-            return Service(service, string.Empty, false, QueryOptions.Default, CancellationToken.None);
+            return Service(service, string.Empty, false, QueryOptions.Default, ct);
         }
 
         /// <summary>
@@ -139,9 +261,9 @@ namespace Consul
         /// <param name="service">The service ID</param>
         /// <param name="tag">The service member tag</param>
         /// <returns>A query result containing the service members matching the provided service ID and tag, or a query result with a null response if no service members matched the filters provided</returns>
-        public Task<QueryResult<ServiceEntry[]>> Service(string service, string tag)
+        public Task<QueryResult<ServiceEntry[]>> Service(string service, string tag, CancellationToken ct = default(CancellationToken))
         {
-            return Service(service, tag, false, QueryOptions.Default, CancellationToken.None);
+            return Service(service, tag, false, QueryOptions.Default, ct);
         }
 
         /// <summary>
@@ -151,21 +273,9 @@ namespace Consul
         /// <param name="tag">The service member tag</param>
         /// <param name="passingOnly">Only return if the health check is in the Passing state</param>
         /// <returns>A query result containing the service members matching the provided service ID, tag, and health status, or a query result with a null response if no service members matched the filters provided</returns>
-        public Task<QueryResult<ServiceEntry[]>> Service(string service, string tag, bool passingOnly)
+        public Task<QueryResult<ServiceEntry[]>> Service(string service, string tag, bool passingOnly, CancellationToken ct = default(CancellationToken))
         {
-            return Service(service, tag, passingOnly, QueryOptions.Default, CancellationToken.None);
-        }
-
-        /// <summary>
-        /// Service is used to query health information along with service info for a given service. It can optionally do server-side filtering on a tag or nodes with passing health checks only.
-        /// </summary>
-        /// <param name="service">The service ID</param>
-        /// <param name="tag">The service member tag</param>
-        /// <param name="passingOnly">Only return if the health check is in the Passing state</param>
-        /// <returns>A query result containing the service members matching the provided service ID, tag, and health status, or a query result with a null response if no service members matched the filters provided</returns>
-        public Task<QueryResult<ServiceEntry[]>> Service(string service, string tag, bool passingOnly, QueryOptions q)
-        {
-            return Service(service, tag, passingOnly, q, CancellationToken.None);
+            return Service(service, tag, passingOnly, QueryOptions.Default, ct);
         }
 
         /// <summary>
@@ -177,7 +287,7 @@ namespace Consul
         /// <param name="q">Customized query options</param>
         /// <param name="ct">Cancellation token for long poll request. If set, OperationCanceledException will be thrown if the request is cancelled before completing</param>
         /// <returns>A query result containing the service members matching the provided service ID, tag, and health status, or a query result with a null response if no service members matched the filters provided</returns>
-        public Task<QueryResult<ServiceEntry[]>> Service(string service, string tag, bool passingOnly, QueryOptions q, CancellationToken ct)
+        public Task<QueryResult<ServiceEntry[]>> Service(string service, string tag, bool passingOnly, QueryOptions q, CancellationToken ct = default(CancellationToken))
         {
             var req = _client.Get<ServiceEntry[]>(string.Format("/v1/health/service/{0}", service), q);
             if (!string.IsNullOrEmpty(tag))
@@ -196,19 +306,9 @@ namespace Consul
         /// </summary>
         /// <param name="status">The health status to filter for</param>
         /// <returns>A query result containing a list of health checks in the specified state, or a query result with a null response if no health checks matched the provided state</returns>
-        public Task<QueryResult<HealthCheck[]>> State(CheckStatus status)
+        public Task<QueryResult<HealthCheck[]>> State(HealthStatus status, CancellationToken ct = default(CancellationToken))
         {
-            return State(status, QueryOptions.Default, CancellationToken.None);
-        }
-
-        /// <summary>
-        /// // State is used to retrieve all the checks in a given state. The wildcard "any" state can also be used for all checks.
-        /// </summary>
-        /// <param name="status">The health status to filter for</param>
-        /// <returns>A query result containing a list of health checks in the specified state, or a query result with a null response if no health checks matched the provided state</returns>
-        public Task<QueryResult<HealthCheck[]>> State(CheckStatus status, QueryOptions q)
-        {
-            return State(status, q, CancellationToken.None);
+            return State(status, QueryOptions.Default, ct);
         }
 
         /// <summary>
@@ -218,7 +318,7 @@ namespace Consul
         /// <param name="q">Customized query options</param>
         /// <param name="ct">Cancellation token for long poll request. If set, OperationCanceledException will be thrown if the request is cancelled before completing</param>
         /// <returns>A query result containing a list of health checks in the specified state, or a query result with a null response if no health checks matched the provided state</returns>
-        public Task<QueryResult<HealthCheck[]>> State(CheckStatus status, QueryOptions q, CancellationToken ct)
+        public Task<QueryResult<HealthCheck[]>> State(HealthStatus status, QueryOptions q, CancellationToken ct = default(CancellationToken))
         {
             return _client.Get<HealthCheck[]>(string.Format("/v1/health/state/{0}", status.Status), q).Execute(ct);
         }
@@ -226,7 +326,7 @@ namespace Consul
 
     public partial class ConsulClient : IConsulClient
     {
-        private Health _health;
+        private Lazy<Health> _health;
 
         /// <summary>
         /// Health returns a handle to the health endpoint
@@ -235,17 +335,7 @@ namespace Consul
         {
             get
             {
-                if (_health == null)
-                {
-                    lock (_lock)
-                    {
-                        if (_health == null)
-                        {
-                            _health = new Health(this);
-                        }
-                    }
-                }
-                return _health;
+                return _health.Value;
             }
         }
     }

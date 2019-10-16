@@ -194,3 +194,9 @@ consul-data/
 consul*.exe
 NuGet.exe
 *.nupkg
+*/serf
+
+# Net Core files
+.vs
+project.lock.json
+.vscode/

@@ -5,7 +5,9 @@ using System.Threading.Tasks;
 
 namespace Consul
 {
+#if !(CORECLR || PORTABLE || PORTABLE40)
     [Serializable]
+#endif
     public class LockHeldException : Exception
     {
         public LockHeldException()
@@ -21,16 +23,15 @@ namespace Consul
             : base(message, inner)
         {
         }
-
+#if !(CORECLR || PORTABLE || PORTABLE40)
         protected LockHeldException(
-            SerializationInfo info,
-            StreamingContext context)
-            : base(info, context)
-        {
-        }
+          SerializationInfo info,
+          StreamingContext context) : base(info, context) { }
+#endif
     }
-
+#if !(CORECLR || PORTABLE || PORTABLE40)
     [Serializable]
+#endif
     public class LockNotHeldException : Exception
     {
         public LockNotHeldException()
@@ -46,16 +47,15 @@ namespace Consul
             : base(message, inner)
         {
         }
-
+#if !(CORECLR || PORTABLE || PORTABLE40)
         protected LockNotHeldException(
-            SerializationInfo info,
-            StreamingContext context)
-            : base(info, context)
-        {
-        }
+          SerializationInfo info,
+          StreamingContext context) : base(info, context) { }
+#endif
     }
-
+#if !(CORECLR || PORTABLE || PORTABLE40)
     [Serializable]
+#endif
     public class LockInUseException : Exception
     {
         public LockInUseException()
@@ -71,16 +71,15 @@ namespace Consul
             : base(message, inner)
         {
         }
-
+#if !(CORECLR || PORTABLE || PORTABLE40)
         protected LockInUseException(
-            SerializationInfo info,
-            StreamingContext context)
-            : base(info, context)
-        {
-        }
+          SerializationInfo info,
+          StreamingContext context) : base(info, context) { }
+#endif
     }
-
+#if !(CORECLR || PORTABLE || PORTABLE40)
     [Serializable]
+#endif
     public class LockConflictException : Exception
     {
         public LockConflictException()
@@ -96,26 +95,25 @@ namespace Consul
             : base(message, inner)
         {
         }
-
+#if !(CORECLR || PORTABLE || PORTABLE40)
         protected LockConflictException(
-            SerializationInfo info,
-            StreamingContext context)
-            : base(info, context)
-        {
-        }
+          SerializationInfo info,
+          StreamingContext context) : base(info, context) { }
+#endif
     }
-
-
+#if !(CORECLR || PORTABLE || PORTABLE40)
     [Serializable]
+#endif
     public class LockMaxAttemptsReachedException : Exception
     {
         public LockMaxAttemptsReachedException() { }
         public LockMaxAttemptsReachedException(string message) : base(message) { }
         public LockMaxAttemptsReachedException(string message, Exception inner) : base(message, inner) { }
+#if !(CORECLR || PORTABLE || PORTABLE40)
         protected LockMaxAttemptsReachedException(
           SerializationInfo info,
-          StreamingContext context) : base(info, context)
-        { }
+          StreamingContext context) : base(info, context) { }
+#endif
     }
 
     /// <summary>
@@ -129,7 +127,9 @@ namespace Consul
         public static readonly TimeSpan DefaultLockWaitTime = TimeSpan.FromSeconds(15);
 
         /// <summary>
-        /// DefaultLockRetryTime is how long we wait after a failed lock acquisition before attempting to do the lock again. This is so that once a lock-delay is in effect, we do not hot loop retrying the acquisition.
+        /// DefaultLockRetryTime is how long we wait after a failed lock acquisition before attempting
+        /// to do the lock again. This is so that once a lock-delay is in effect, we do not hot loop
+        /// retrying the acquisition.
         /// </summary>
         public static readonly TimeSpan DefaultLockRetryTime = TimeSpan.FromSeconds(5);
 
@@ -147,12 +147,12 @@ namespace Consul
         private const ulong LockFlagValue = 0x2ddccbc058a50c18;
 
         private readonly AsyncLock _mutex = new AsyncLock();
-        private readonly object _heldLock = new object();
         private bool _isheld;
         private int _retries;
 
         private CancellationTokenSource _cts;
         private Task _sessionRenewTask;
+        private Task _monitorTask;
 
         private readonly ConsulClient _client;
         internal LockOptions Opts { get; set; }
@@ -167,20 +167,13 @@ namespace Consul
         {
             get
             {
-                lock (_heldLock)
-                {
-                    return _isheld;
-                }
+                return _isheld;
             }
             private set
             {
-                lock (_heldLock)
-                {
-                    _isheld = value;
-                }
+                _isheld = value;
             }
         }
-
 
         internal Lock(ConsulClient c)
         {
@@ -211,9 +204,9 @@ namespace Consul
         /// <param name="ct">The cancellation token to cancel lock acquisition</param>
         public async Task<CancellationToken> Acquire(CancellationToken ct)
         {
-            using(await _mutex.LockAsync().ConfigureAwait(false))
+            try
             {
-                try
+                using (await _mutex.LockAsync().ConfigureAwait(false))
                 {
                     if (IsHeld)
                     {
@@ -221,27 +214,17 @@ namespace Consul
                         throw new LockHeldException();
                     }
 
-                    // Don't overwrite the CancellationTokenSource until AFTER we've tested for holding, since there might be tasks that are currently running for this lock.
-                    if (_cts.IsCancellationRequested)
-                    {
-                        _cts.Dispose();
-                        _cts = new CancellationTokenSource();
-                    }
+                    // Don't overwrite the CancellationTokenSource until AFTER we've tested for holding,
+                    // since there might be tasks that are currently running for this lock.
+                    DisposeCancellationTokenSource();
+                    _cts = new CancellationTokenSource();
 
                     // Check if we need to create a session first
                     if (string.IsNullOrEmpty(Opts.Session))
                     {
-                        try
-                        {
-                            Opts.Session = await CreateSession().ConfigureAwait(false);
-                            _sessionRenewTask = _client.Session.RenewPeriodic(Opts.SessionTTL, Opts.Session,
-                                WriteOptions.Default, _cts.Token);
-                            LockSession = Opts.Session;
-                        }
-                        catch (Exception ex)
-                        {
-                            throw new ConsulRequestException("Failed to create session", ex);
-                        }
+                        LockSession = await CreateSession().ConfigureAwait(false);
+                        _sessionRenewTask = _client.Session.RenewPeriodic(Opts.SessionTTL, LockSession,
+                            WriteOptions.Default, _cts.Token);
                     }
                     else
                     {
@@ -254,30 +237,32 @@ namespace Consul
                     };
 
                     var attempts = 0;
+                    var start = DateTime.UtcNow;
 
                     while (!ct.IsCancellationRequested)
                     {
                         if (attempts > 0 && Opts.LockTryOnce)
                         {
-                            throw new LockMaxAttemptsReachedException("LockTryOnce is set and the lock is already held or lock delay is in effect");
+                            var elapsed = DateTime.UtcNow.Subtract(start);
+                            if (elapsed > qOpts.WaitTime)
+                            {
+                                DisposeCancellationTokenSource();
+                                throw new LockMaxAttemptsReachedException("LockTryOnce is set and the lock is already held or lock delay is in effect");
+                            }
+                            qOpts.WaitTime -= elapsed;
                         }
 
                         attempts++;
 
                         QueryResult<KVPair> pair;
-                        try
-                        {
-                            pair = await _client.KV.Get(Opts.Key, qOpts).ConfigureAwait(false);
-                        }
-                        catch (Exception ex)
-                        {
-                            throw new ConsulRequestException("Failed to read lock key", ex);
-                        }
+
+                        pair = await _client.KV.Get(Opts.Key, qOpts).ConfigureAwait(false);
 
                         if (pair.Response != null)
                         {
                             if (pair.Response.Flags != LockFlagValue)
                             {
+                                DisposeCancellationTokenSource();
                                 throw new LockConflictException();
                             }
 
@@ -290,7 +275,7 @@ namespace Consul
                                     return _cts.Token;
                                 }
                                 IsHeld = true;
-                                MonitorLock();
+                                _monitorTask = MonitorLock();
                                 return _cts.Token;
                             }
 
@@ -303,21 +288,21 @@ namespace Consul
                         }
 
                         // If the code executes this far, no other session has the lock, so try to lock it
-                        var kvPair = LockEntry(Opts.Session);
+                        var kvPair = LockEntry(LockSession);
                         var locked = (await _client.KV.Acquire(kvPair).ConfigureAwait(false)).Response;
 
                         // KV acquisition succeeded, so the session now holds the lock
                         if (locked)
                         {
                             IsHeld = true;
-                            MonitorLock();
+                            _monitorTask = MonitorLock();
                             return _cts.Token;
                         }
 
                         // Handle the case of not getting the lock
                         if (ct.IsCancellationRequested)
                         {
-                            _cts.Cancel();
+                            DisposeCancellationTokenSource();
                             throw new TaskCanceledException();
                         }
 
@@ -332,33 +317,31 @@ namespace Consul
                             continue;
                         }
 
-                        // If the session is null and the lock failed to acquire, then it means a lock-delay is in effect and a timed wait must be used to avoid a hot loop.
-                        try { await Task.Delay(DefaultLockRetryTime, ct).ConfigureAwait(false); }
-                        catch (TaskCanceledException) {/* Ignore TaskTaskCanceledException */}
+                        // If the session is null and the lock failed to acquire, then it means
+                        // a lock-delay is in effect and a timed wait must be used to avoid a hot loop.
+                        try { await Task.Delay(Opts.LockRetryTime, ct).ConfigureAwait(false); }
+                        catch (TaskCanceledException) { /* Ignore TaskTaskCanceledException */}
                     }
+                    DisposeCancellationTokenSource();
                     throw new LockNotHeldException("Unable to acquire the lock with Consul");
                 }
-                finally
+            }
+            finally
+            {
+                if (ct.IsCancellationRequested || (!IsHeld && !string.IsNullOrEmpty(Opts.Session)))
                 {
-                    if (ct.IsCancellationRequested || (!IsHeld && !string.IsNullOrEmpty(Opts.Session)))
+                    DisposeCancellationTokenSource();
+                    if (_sessionRenewTask != null)
                     {
-                        _cts.Cancel();
-                        if (_sessionRenewTask != null)
+                        try
                         {
-                            try
-                            {
-                                await _sessionRenewTask.ConfigureAwait(false);
-                            }
-                            catch (AggregateException)
-                            {
-                                // Ignore AggregateExceptions from the tasks during Release, since if the Renew task died, the developer will be Super Confused if they see the exception during Release.
-                            }
+                            await _monitorTask.ConfigureAwait(false);
+                            await _sessionRenewTask.ConfigureAwait(false);
                         }
-                        else
+                        catch (AggregateException)
                         {
-                            await _client.Session.Destroy(Opts.Session).ConfigureAwait(false);
+                            // Ignore AggregateExceptions from the tasks during Release, since if the Renew task died, the developer will be Super Confused if they see the exception during Release.
                         }
-                        Opts.Session = null;
                     }
                 }
             }
@@ -367,11 +350,11 @@ namespace Consul
         /// <summary>
         /// Unlock released the lock. It is an error to call this if the lock is not currently held.
         /// </summary>
-        public async Task Release()
+        public async Task Release(CancellationToken ct = default(CancellationToken))
         {
-            using (await _mutex.LockAsync().ConfigureAwait(false))
+            try
             {
-                try
+                using (await _mutex.LockAsync().ConfigureAwait(false))
                 {
                     if (!IsHeld)
                     {
@@ -379,28 +362,24 @@ namespace Consul
                     }
                     IsHeld = false;
 
-                    _cts.Cancel();
+                    DisposeCancellationTokenSource();
 
-                    var lockEnt = LockEntry(Opts.Session);
+                    var lockEnt = LockEntry(LockSession);
 
-                    Opts.Session = null;
-                    await _client.KV.Release(lockEnt).ConfigureAwait(false);
+                    await _client.KV.Release(lockEnt, ct).ConfigureAwait(false);
                 }
-                finally
+            }
+            finally
+            {
+                if (_sessionRenewTask != null)
                 {
-                    if (_sessionRenewTask != null)
+                    try
                     {
-                        if (_sessionRenewTask != null)
-                        {
-                            try
-                            {
-                                await _sessionRenewTask.ConfigureAwait(false);
-                            }
-                            catch (Exception)
-                            {
-                                // Ignore Exceptions from the tasks during Release, since if the Renew task died, the developer will be Super Confused if they see the exception during Release.
-                            }
-                        }
+                        await _sessionRenewTask.ConfigureAwait(false);
+                    }
+                    catch (Exception)
+                    {
+                        // Ignore Exceptions from the tasks during Release, since if the Renew task died, the developer will be Super Confused if they see the exception during Release.
                     }
                 }
             }
@@ -409,7 +388,7 @@ namespace Consul
         /// <summary>
         /// Destroy is used to cleanup the lock entry. It is not necessary to invoke. It will fail if the lock is in use.
         /// </summary>
-        public async Task Destroy()
+        public async Task Destroy(CancellationToken ct = default(CancellationToken))
         {
             using (await _mutex.LockAsync().ConfigureAwait(false))
             {
@@ -418,7 +397,7 @@ namespace Consul
                     throw new LockHeldException();
                 }
 
-                var pair = (await _client.KV.Get(Opts.Key).ConfigureAwait(false)).Response;
+                var pair = (await _client.KV.Get(Opts.Key, ct).ConfigureAwait(false)).Response;
 
                 if (pair == null)
                 {
@@ -435,7 +414,7 @@ namespace Consul
                     throw new LockInUseException();
                 }
 
-                var didRemove = (await _client.KV.DeleteCAS(pair).ConfigureAwait(false)).Response;
+                var didRemove = (await _client.KV.DeleteCAS(pair, ct).ConfigureAwait(false)).Response;
 
                 if (!didRemove)
                 {
@@ -444,18 +423,32 @@ namespace Consul
             }
         }
 
+        private void DisposeCancellationTokenSource()
+        {
+            // Make a copy of the reference to the CancellationTokenSource in case it gets removed before we finish.
+            // It's okay to cancel and dispose of them twice, it doesn't cause exceptions.
+            var cts = _cts;
+            if (cts != null)
+            {
+                Interlocked.CompareExchange(ref _cts, null, cts);
+                cts.Cancel();
+                cts.Dispose();
+            }
+        }
+
         /// <summary>
         /// MonitorLock is a long running routine to monitor a lock ownership. It sets IsHeld to false if we lose our leadership.
         /// </summary>
         private Task MonitorLock()
         {
-            return Task.Run(async () =>
-            {
+            return Task.Factory.StartNew(async () => { 
+                // Copy a reference to _cts since we could end up destroying it before this method returns
+                var cts = _cts;
                 try
                 {
                     var opts = new QueryOptions() { Consistency = ConsistencyMode.Consistent };
                     _retries = Opts.MonitorRetries;
-                    while (IsHeld && !_cts.Token.IsCancellationRequested)
+                    while (IsHeld && !cts.Token.IsCancellationRequested)
                     {
                         try
                         {
@@ -466,10 +459,10 @@ namespace Consul
                                 _retries = Opts.MonitorRetries;
 
                                 // Lock is no longer held! Shut down everything.
-                                if (pair.Response.Session != Opts.Session)
+                                if (pair.Response.Session != LockSession)
                                 {
                                     IsHeld = false;
-                                    _cts.Cancel();
+                                    DisposeCancellationTokenSource();
                                     return;
                                 }
 
@@ -481,29 +474,37 @@ namespace Consul
                             {
                                 // Failsafe in case the KV store is unavailable
                                 IsHeld = false;
-                                _cts.Cancel();
+                                DisposeCancellationTokenSource();
                                 return;
                             }
                         }
-                        catch (Exception)
+                        catch (ConsulRequestException)
                         {
                             if (_retries > 0)
                             {
-                                await Task.Delay(Opts.MonitorRetryTime, _cts.Token).ConfigureAwait(false);
+                                await Task.Delay(Opts.MonitorRetryTime, cts.Token).ConfigureAwait(false);
                                 _retries--;
                                 opts.WaitIndex = 0;
                                 continue;
                             }
                             throw;
                         }
+                        catch (OperationCanceledException)
+                        {
+                            // Ignore and retry since this could be the underlying HTTPClient being swapped out/disposed of.
+                        }
+                        catch (Exception)
+                        {
+                            throw;
+                        }
                     }
-
                 }
                 finally
                 {
                     IsHeld = false;
+                    DisposeCancellationTokenSource();
                 }
-            });
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
         }
 
         /// <summary>
@@ -546,10 +547,14 @@ namespace Consul
         /// </summary>
         private const string DefaultLockSessionName = "Consul API Lock";
 
+        private static readonly TimeSpan LockRetryTimeMin = TimeSpan.FromMilliseconds(500);
+
         /// <summary>
         /// DefaultLockSessionTTL is the default session TTL if no Session is provided when creating a new Lock. This is used because we do not have another other check to depend upon.
         /// </summary>
-        private readonly TimeSpan DefaultLockSessionTTL = TimeSpan.FromSeconds(15);
+        private static readonly TimeSpan DefaultLockSessionTTL = TimeSpan.FromSeconds(15);
+
+        private TimeSpan _lockRetryTime;
 
         public string Key { get; set; }
         public byte[] Value { get; set; }
@@ -557,8 +562,21 @@ namespace Consul
         public string SessionName { get; set; }
         public TimeSpan SessionTTL { get; set; }
         public int MonitorRetries { get; set; }
-        public TimeSpan MonitorRetryTime { get; set; }
+        public TimeSpan LockRetryTime
+        {
+            get { return _lockRetryTime; }
+            set
+            {
+                if (value < LockRetryTimeMin)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(LockRetryTime), $"The retry time must be greater than {LockRetryTimeMin.ToGoDuration()}.");
+                }
+
+                _lockRetryTime = value;
+            }
+        }
         public TimeSpan LockWaitTime { get; set; }
+        public TimeSpan MonitorRetryTime { get; set; }
         public bool LockTryOnce { get; set; }
 
         public LockOptions(string key)
@@ -568,6 +586,7 @@ namespace Consul
             SessionTTL = DefaultLockSessionTTL;
             MonitorRetryTime = Lock.DefaultMonitorRetryTime;
             LockWaitTime = Lock.DefaultLockWaitTime;
+            LockRetryTime = Lock.DefaultLockRetryTime;
         }
     }
 
@@ -582,7 +601,7 @@ namespace Consul
         {
             if (string.IsNullOrEmpty(key))
             {
-                throw new ArgumentNullException("key");
+                throw new ArgumentNullException(nameof(key));
             }
             return CreateLock(new LockOptions(key));
         }
@@ -596,63 +615,37 @@ namespace Consul
         {
             if (opts == null)
             {
-                throw new ArgumentNullException("opts");
+                throw new ArgumentNullException(nameof(opts));
             }
             return new Lock(this) { Opts = opts };
         }
 
         /// <summary>
-        /// AcquireLock creates a lock that is already pre-acquired and implements IDisposable to be used in a "using" block
-        /// </summary>
-        /// <param name="key"></param>
-        /// <returns></returns>
-        public Task<IDistributedLock> AcquireLock(string key)
-        {
-            if (string.IsNullOrEmpty(key))
-            {
-                throw new ArgumentNullException("key");
-            }
-            return AcquireLock(new LockOptions(key), CancellationToken.None);
-        }
-
-        /// <summary>
-        /// AcquireLock creates a lock that is already pre-acquired and implements IDisposable to be used in a "using" block
+        /// AcquireLock creates a lock that is already acquired when this call returns.
         /// </summary>
         /// <param name="key"></param>
         /// <param name="ct"></param>
         /// <returns></returns>
-        public Task<IDistributedLock> AcquireLock(string key, CancellationToken ct)
+        public Task<IDistributedLock> AcquireLock(string key, CancellationToken ct = default(CancellationToken))
         {
             if (string.IsNullOrEmpty(key))
             {
-                throw new ArgumentNullException("key");
+                throw new ArgumentNullException(nameof(key));
             }
             return AcquireLock(new LockOptions(key), ct);
         }
 
-
         /// <summary>
-        /// AcquireLock creates a lock that is already pre-acquired and implements IDisposable to be used in a "using" block
+        /// AcquireLock creates a lock that is already acquired when this call returns.
         /// </summary>
         /// <param name="opts"></param>
         /// <param name="ct"></param>
         /// <returns></returns>
-        public Task<IDistributedLock> AcquireLock(LockOptions opts)
-        {
-            return AcquireLock(opts, CancellationToken.None);
-        }
-
-        /// <summary>
-        /// AcquireLock creates a lock that is already pre-acquired and implements IDisposable to be used in a "using" block
-        /// </summary>
-        /// <param name="opts"></param>
-        /// <param name="ct"></param>
-        /// <returns></returns>
-        public async Task<IDistributedLock> AcquireLock(LockOptions opts, CancellationToken ct)
+        public async Task<IDistributedLock> AcquireLock(LockOptions opts, CancellationToken ct = default(CancellationToken))
         {
             if (opts == null)
             {
-                throw new ArgumentNullException("opts");
+                throw new ArgumentNullException(nameof(opts));
             }
 
             var l = CreateLock(opts);
@@ -666,13 +659,13 @@ namespace Consul
         /// <param name="key"></param>
         /// <param name="action"></param>
         /// <returns></returns>
-        public Task ExecuteLocked(string key, Action action)
+        public Task ExecuteLocked(string key, Action action, CancellationToken ct = default(CancellationToken))
         {
             if (string.IsNullOrEmpty(key))
             {
-                throw new ArgumentNullException("key");
+                throw new ArgumentNullException(nameof(key));
             }
-            return ExecuteLocked(new LockOptions(key), CancellationToken.None, action);
+            return ExecuteLocked(new LockOptions(key), action, ct);
         }
 
         /// <summary>
@@ -681,50 +674,15 @@ namespace Consul
         /// <param name="opts"></param>
         /// <param name="action"></param>
         /// <returns></returns>
-        public Task ExecuteLocked(LockOptions opts, Action action)
+        public async Task ExecuteLocked(LockOptions opts, Action action, CancellationToken ct = default(CancellationToken))
         {
             if (opts == null)
             {
-                throw new ArgumentNullException("opts");
-            }
-            return ExecuteLocked(opts, CancellationToken.None, action);
-        }
-        /// <summary>
-        /// ExecuteLock accepts a delegate to execute in the context of a lock, releasing the lock when completed.
-        /// </summary>
-        /// <param name="key"></param>
-        /// <param name="ct"></param>
-        /// <param name="action"></param>
-        /// <returns></returns>
-        public Task ExecuteLocked(string key, CancellationToken ct, Action action)
-        {
-            if (string.IsNullOrEmpty(key))
-            {
-                throw new ArgumentNullException("key");
+                throw new ArgumentNullException(nameof(opts));
             }
             if (action == null)
             {
-                throw new ArgumentNullException("action");
-            }
-            return ExecuteLocked(new LockOptions(key), ct, action);
-        }
-
-        /// <summary>
-        /// ExecuteLock accepts a delegate to execute in the context of a lock, releasing the lock when completed.
-        /// </summary>
-        /// <param name="opts"></param>
-        /// <param name="ct"></param>
-        /// <param name="action"></param>
-        /// <returns></returns>
-        public async Task ExecuteLocked(LockOptions opts, CancellationToken ct, Action action)
-        {
-            if (opts == null)
-            {
-                throw new ArgumentNullException("opts");
-            }
-            if (action == null)
-            {
-                throw new ArgumentNullException("action");
+                throw new ArgumentNullException(nameof(action));
             }
 
             var l = await AcquireLock(opts, ct).ConfigureAwait(false);
@@ -741,6 +699,44 @@ namespace Consul
             {
                 await l.Release().ConfigureAwait(false);
             }
-        }    
+
+        }
+        /// <summary>
+        /// ExecuteLock accepts a delegate to execute in the context of a lock, releasing the lock when completed.
+        /// </summary>
+        /// <param name="key"></param>
+        /// <param name="ct"></param>
+        /// <param name="action"></param>
+        /// <returns></returns>
+        [Obsolete("This method will be removed in 0.8.0. Replace calls with the method signature ExecuteLocked(string, Action, CancellationToken)")]
+        public Task ExecuteLocked(string key, CancellationToken ct, Action action)
+        {
+            if (string.IsNullOrEmpty(key))
+            {
+                throw new ArgumentNullException(nameof(key));
+            }
+            if (action == null)
+            {
+                throw new ArgumentNullException(nameof(action));
+            }
+            return ExecuteLocked(new LockOptions(key), action, ct);
+        }
+
+        /// <summary>
+        /// ExecuteLock accepts a delegate to execute in the context of a lock, releasing the lock when completed.
+        /// </summary>
+        /// <param name="opts"></param>
+        /// <param name="ct"></param>
+        /// <param name="action"></param>
+        /// <returns></returns>
+        [Obsolete("This method will be removed in 0.8.0. Replace calls with the method signature ExecuteLocked(LockOptions, Action, CancellationToken)")]
+        public Task ExecuteLocked(LockOptions opts, CancellationToken ct, Action action)
+        {
+            if (opts == null)
+            {
+                throw new ArgumentNullException(nameof(opts));
+            }
+            return ExecuteLocked(opts, action, ct);
+        }
     }
 }

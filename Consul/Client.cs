@@ -10,27 +10,56 @@ using System.Threading.Tasks;
 using System.Net.Http.Headers;
 using System.Linq;
 using System.Security.Cryptography.X509Certificates;
+#if !(CORECLR || PORTABLE || PORTABLE40)
+using System.Security.Permissions;
+using System.Runtime.Serialization;
+#endif
 
 namespace Consul
 {
     /// <summary>
     /// Represents errors that occur while sending data to or fetching data from the Consul agent.
     /// </summary>
+#if !(CORECLR || PORTABLE || PORTABLE40)
+    [Serializable]
+#endif
     public class ConsulRequestException : Exception
     {
+        public HttpStatusCode StatusCode { get; set; }
         public ConsulRequestException() { }
-        public ConsulRequestException(string message) : base(message) { }
-        public ConsulRequestException(string message, Exception inner) : base(message, inner) { }
+        public ConsulRequestException(string message, HttpStatusCode statusCode) : base(message) { StatusCode = statusCode; }
+        public ConsulRequestException(string message, HttpStatusCode statusCode, Exception inner) : base(message, inner) { StatusCode = statusCode; }
+#if !(CORECLR || PORTABLE || PORTABLE40)
+        protected ConsulRequestException(
+          SerializationInfo info,
+          StreamingContext context) : base(info, context) { }
+
+        [SecurityPermission(SecurityAction.Demand, SerializationFormatter = true)]
+        public override void GetObjectData(SerializationInfo info, StreamingContext context)
+        {
+            base.GetObjectData(info, context);
+
+            info.AddValue("StatusCode", StatusCode);
+        }
+#endif
     }
 
     /// <summary>
     /// Represents errors that occur during initalization of the Consul client's configuration.
     /// </summary>
+#if !(CORECLR || PORTABLE || PORTABLE40)
+    [Serializable]
+#endif
     public class ConsulConfigurationException : Exception
     {
         public ConsulConfigurationException() { }
         public ConsulConfigurationException(string message) : base(message) { }
         public ConsulConfigurationException(string message, Exception inner) : base(message, inner) { }
+#if !(CORECLR || PORTABLE || PORTABLE40)
+        protected ConsulConfigurationException(
+          System.Runtime.Serialization.SerializationInfo info,
+          System.Runtime.Serialization.StreamingContext context) : base(info, context) { }
+#endif
     }
 
     /// <summary>
@@ -44,6 +73,17 @@ namespace Consul
 
         internal event EventHandler Updated;
 
+        internal static Lazy<bool> _clientCertSupport = new Lazy<bool>(() => { return Type.GetType("Mono.Runtime") == null; });
+
+        internal bool ClientCertificateSupported { get { return _clientCertSupport.Value; } }
+
+#if CORECLR
+        [Obsolete("Use of DisableServerCertificateValidation should be converted to setting the HttpHandler's ServerCertificateCustomValidationCallback in the ConsulClient constructor" +
+            "This property will be removed when 0.8.0 is released.", false)]
+#else
+        [Obsolete("Use of DisableServerCertificateValidation should be converted to setting the WebRequestHandler's ServerCertificateValidationCallback in the ConsulClient constructor" +
+            "This property will be removed when 0.8.0 is released.", false)]
+#endif
         internal bool DisableServerCertificateValidation
         {
             get
@@ -71,6 +111,13 @@ namespace Consul
         /// Credentials to use for access to the HTTP API.
         /// This is only needed if an authenticating service exists in front of Consul; Token is used for ACL authentication by Consul.
         /// </summary>
+#if CORECLR
+        [Obsolete("Use of HttpAuth should be converted to setting the HttpHandler's Credential property in the ConsulClient constructor" +
+            "This property will be removed when 0.8.0 is released.", false)]
+#else
+        [Obsolete("Use of HttpAuth should be converted to setting the WebRequestHandler's Credential property in the ConsulClient constructor" +
+            "This property will be removed when 0.8.0 is released.", false)]
+#endif
         public NetworkCredential HttpAuth
         {
             internal get
@@ -85,9 +132,19 @@ namespace Consul
         }
 
         /// <summary>
-        /// TLS Client Certificate used to secure a connection to a Consul agent.
+        /// TLS Client Certificate used to secure a connection to a Consul agent. Not supported on Mono.
         /// This is only needed if an authenticating service exists in front of Consul; Token is used for ACL authentication by Consul. This is not the same as RPC Encryption with TLS certificates.
         /// </summary>
+        /// <exception cref="PlatformNotSupportedException">Setting this property will throw a PlatformNotSupportedException on Mono</exception>
+#if __MonoCS__
+        [Obsolete("Client Certificates are not implemented in Mono", true)]
+#elif CORECLR
+        [Obsolete("Use of ClientCertificate should be converted to adding to the HttpHandler's ClientCertificates list in the ConsulClient constructor." +
+            "This property will be removed when 0.8.0 is released.", false)]
+#else
+        [Obsolete("Use of ClientCertificate should be converted to adding to the WebRequestHandler's ClientCertificates list in the ConsulClient constructor." +
+            "This property will be removed when 0.8.0 is released.", false)]
+#endif
         public X509Certificate2 ClientCertificate
         {
             internal get
@@ -96,6 +153,10 @@ namespace Consul
             }
             set
             {
+                if (!ClientCertificateSupported)
+                {
+                    throw new PlatformNotSupportedException("Client certificates are not supported on this platform");
+                }
                 _clientCertificate = value;
                 OnUpdated(new EventArgs());
             }
@@ -120,7 +181,6 @@ namespace Consul
         {
             UriBuilder consulAddress = new UriBuilder("http://127.0.0.1:8500");
             ConfigureFromEnvironment(consulAddress);
-
             Address = consulAddress.Uri;
         }
 
@@ -142,7 +202,7 @@ namespace Consul
                 {
                     consulAddress.Host = addrParts[0];
                 }
-                if (!string.IsNullOrEmpty(addrParts[1]))
+                if (addrParts.Length > 1 && !string.IsNullOrEmpty(addrParts[1]))
                 {
                     try
                     {
@@ -178,7 +238,9 @@ namespace Consul
                 {
                     if (verifySsl == "0" || bool.Parse(verifySsl))
                     {
+#pragma warning disable CS0618 // Type or member is obsolete
                         DisableServerCertificateValidation = true;
+#pragma warning restore CS0618 // Type or member is obsolete
                     }
                 }
                 catch (Exception ex)
@@ -201,7 +263,9 @@ namespace Consul
                 {
                     credential.UserName = auth;
                 }
+#pragma warning disable CS0618 // Type or member is obsolete
                 HttpAuth = credential;
+#pragma warning restore CS0618 // Type or member is obsolete
             }
 
             if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CONSUL_HTTP_TOKEN")))
@@ -218,11 +282,7 @@ namespace Consul
             EventHandler handler = Updated;
 
             // Event will be null if there are no subscribers
-            if (handler != null)
-            {
-                // Use the () operator to raise the event.
-                handler(this, e);
-            }
+            handler?.Invoke(this, e);
         }
     }
 
@@ -354,6 +414,11 @@ namespace Consul
         /// </summary>
         public bool KnownLeader { get; set; }
 
+        /// <summary>
+        /// Is address translation enabled for HTTP responses on this agent
+        /// </summary>
+        public bool AddressTranslationEnabled { get; set; }
+
         public QueryResult() { }
         public QueryResult(QueryResult other) : base(other)
         {
@@ -412,33 +477,183 @@ namespace Consul
     /// </summary>
     public partial class ConsulClient : IDisposable
     {
-        private object _lock = new object();
-        private bool skipClientDispose;
-        internal HttpClient HttpClient { get; set; }
-        internal HttpMessageHandler Handler;
-        internal ConsulClientConfiguration Config { get; set; }
+
+        /// <summary>
+        /// This class is used to group all the configurable bits of a ConsulClient into a single pointer reference
+        /// which is great for implementing reconfiguration later.
+        /// </summary>
+        private class ConsulClientConfigurationContainer
+        {
+
+            internal readonly bool skipClientDispose;
+            internal readonly HttpClient HttpClient;
+#if CORECLR
+            internal readonly HttpClientHandler HttpHandler;
+#else
+            internal readonly WebRequestHandler HttpHandler;
+#endif
+            public readonly ConsulClientConfiguration Config;
+
+            public ConsulClientConfigurationContainer()
+            {
+                Config = new ConsulClientConfiguration();
+#if CORECLR
+                HttpHandler = new HttpClientHandler();
+#else
+                HttpHandler = new WebRequestHandler();
+#endif
+                HttpClient = new HttpClient(HttpHandler);
+                HttpClient.Timeout = TimeSpan.FromMinutes(15);
+                HttpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                HttpClient.DefaultRequestHeaders.Add("Keep-Alive", "true");
+            }
+
+            #region Old style config handling
+            public ConsulClientConfigurationContainer(ConsulClientConfiguration config, HttpClient client)
+            {
+                skipClientDispose = true;
+                Config = config;
+                HttpClient = client;
+            }
+
+            public ConsulClientConfigurationContainer(ConsulClientConfiguration config)
+            {
+                Config = config;
+#if CORECLR
+                HttpHandler = new HttpClientHandler();
+#else
+                HttpHandler = new WebRequestHandler();
+#endif
+                HttpClient = new HttpClient(HttpHandler);
+                HttpClient.Timeout = TimeSpan.FromMinutes(15);
+                HttpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                HttpClient.DefaultRequestHeaders.Add("Keep-Alive", "true");
+            }
+            #endregion
+
+            #region IDisposable Support
+            private bool disposedValue = false; // To detect redundant calls
+
+            protected virtual void Dispose(bool disposing)
+            {
+                if (!disposedValue)
+                {
+                    if (disposing)
+                    {
+                        if (HttpClient != null && !skipClientDispose)
+                        {
+                            HttpClient.Dispose();
+                        }
+                        if (HttpHandler != null)
+                        {
+                            HttpHandler.Dispose();
+                        }
+                    }
+
+                    disposedValue = true;
+                }
+            }
+
+            //~ConsulClient()
+            //{
+            //    // Do not change this code. Put cleanup code in Dispose(bool disposing) above.
+            //    Dispose(false);
+            //}
+
+            // This code added to correctly implement the disposable pattern.
+            public void Dispose()
+            {
+                // Do not change this code. Put cleanup code in Dispose(bool disposing) above.
+                Dispose(true);
+                GC.SuppressFinalize(this);
+            }
+
+            public void CheckDisposed()
+            {
+                if (disposedValue)
+                {
+                    throw new ObjectDisposedException(typeof(ConsulClientConfigurationContainer).FullName.ToString());
+                }
+            }
+            #endregion
+        }
+
+        private ConsulClientConfigurationContainer ConfigContainer;
+
+        internal HttpClient HttpClient { get { return ConfigContainer.HttpClient; } }
+#if CORECLR
+        internal HttpClientHandler HttpHandler { get { return ConfigContainer.HttpHandler; } }
+#else
+        internal WebRequestHandler HttpHandler { get { return ConfigContainer.HttpHandler; } }
+#endif
+        public ConsulClientConfiguration Config { get { return ConfigContainer.Config; } }
 
         internal readonly JsonSerializer serializer = new JsonSerializer();
 
+        #region New style config with Actions
         /// <summary>
-        /// Initializes a new Consul client with a default configuration.
+        /// Initializes a new Consul client with a default configuration that connects to 127.0.0.1:8500.
         /// </summary>
-        public ConsulClient() : this(new ConsulClientConfiguration()) { }
+        public ConsulClient() : this(null, null, null) { }
 
+        /// <summary>
+        /// Initializes a new Consul client with the ability to set portions of the configuration.
+        /// </summary>
+        /// <param name="configOverride">The Action to modify the default configuration with</param>
+        public ConsulClient(Action<ConsulClientConfiguration> configOverride) : this(configOverride, null, null) { }
+
+        /// <summary>
+        /// Initializes a new Consul client with the ability to set portions of the configuration and access the underlying HttpClient for modification.
+        /// The HttpClient is modified to set options like the request timeout and headers.
+        /// The Timeout property also applies to all long-poll requests and should be set to a value that will encompass all successful requests.
+        /// </summary>
+        /// <param name="configOverride">The Action to modify the default configuration with</param>
+        /// <param name="clientOverride">The Action to modify the HttpClient with</param>
+        public ConsulClient(Action<ConsulClientConfiguration> configOverride, Action<HttpClient> clientOverride) : this(configOverride, clientOverride, null) { }
+
+        /// <summary>
+        /// Initializes a new Consul client with the ability to set portions of the configuration and access the underlying HttpClient and WebRequestHandler for modification.
+        /// The HttpClient is modified to set options like the request timeout and headers.
+        /// The WebRequestHandler is modified to set options like Proxy and Credentials.
+        /// The Timeout property also applies to all long-poll requests and should be set to a value that will encompass all successful requests.
+        /// </summary>
+        /// <param name="configOverride">The Action to modify the default configuration with</param>
+        /// <param name="clientOverride">The Action to modify the HttpClient with</param>
+        /// <param name="handlerOverride">The Action to modify the WebRequestHandler with</param>
+#if !CORECLR
+        public ConsulClient(Action<ConsulClientConfiguration> configOverride, Action<HttpClient> clientOverride, Action<WebRequestHandler> handlerOverride)
+#else
+        public ConsulClient(Action<ConsulClientConfiguration> configOverride, Action<HttpClient> clientOverride, Action<HttpClientHandler> handlerOverride)
+#endif
+        {
+            var ctr = new ConsulClientConfigurationContainer();
+
+            configOverride?.Invoke(ctr.Config);
+            ApplyConfig(ctr.Config, ctr.HttpHandler, ctr.HttpClient);
+            handlerOverride?.Invoke(ctr.HttpHandler);
+            clientOverride?.Invoke(ctr.HttpClient);
+
+            ConfigContainer = ctr;
+
+            InitializeEndpoints();
+        }
+        #endregion
+
+        #region Old style config
         /// <summary>
         /// Initializes a new Consul client with the configuration specified.
         /// </summary>
         /// <param name="config">A Consul client configuration</param>
+        [Obsolete("This constructor is no longer necessary due to the new Action based constructors and will be removed when 0.8.0 is released." +
+            "Please use the ConsulClient(Action<ConsulClientConfiguration>) constructor to set configuration options.", false)]
         public ConsulClient(ConsulClientConfiguration config)
         {
-            Config = config;
             config.Updated += HandleConfigUpdateEvent;
-            Handler = new WebRequestHandler();
-            ApplyConfig(config);
-            HttpClient = new HttpClient(Handler);
-            HttpClient.Timeout = TimeSpan.FromMinutes(15);
-            HttpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            HttpClient.DefaultRequestHeaders.Add("Keep-Alive", "true");
+            var ctr = new ConsulClientConfigurationContainer(config);
+            ApplyConfig(ctr.Config, ctr.HttpHandler, ctr.HttpClient);
+            
+            ConfigContainer = ctr;
+            InitializeEndpoints();
         }
 
         /// <summary>
@@ -447,15 +662,35 @@ namespace Consul
         /// </summary>
         /// <param name="config">A Consul client configuration</param>
         /// <param name="client">A custom HttpClient</param>
+        [Obsolete("This constructor is no longer necessary due to the new Action based constructors and will be removed when 0.8.0 is released." +
+            "Please use one of the ConsulClient(Action<>) constructors instead to set internal options on the HttpClient/WebRequestHandler.", false)]
         public ConsulClient(ConsulClientConfiguration config, HttpClient client)
         {
-            Config = config;
-            HttpClient = client;
-            skipClientDispose = true;
-            if (!HttpClient.DefaultRequestHeaders.Accept.Contains(new MediaTypeWithQualityHeaderValue("application/json")))
+            var ctr = new ConsulClientConfigurationContainer(config, client);
+            if (!ctr.HttpClient.DefaultRequestHeaders.Accept.Contains(new MediaTypeWithQualityHeaderValue("application/json")))
             {
-                throw new ArgumentException("HttpClient must accept the application/json content type", "client");
+                throw new ArgumentException("HttpClient must accept the application/json content type", nameof(client));
             }
+            ConfigContainer = ctr;
+            InitializeEndpoints();
+        }
+        #endregion
+
+        private void InitializeEndpoints()
+        {
+            _acl = new Lazy<ACL>(() => new ACL(this));
+            _agent = new Lazy<Agent>(() => new Agent(this));
+            _catalog = new Lazy<Catalog>(() => new Catalog(this));
+            _coordinate = new Lazy<Coordinate>(() => new Coordinate(this));
+            _event = new Lazy<Event>(() => new Event(this));
+            _health = new Lazy<Health>(() => new Health(this));
+            _kv = new Lazy<KV>(() => new KV(this));
+            _operator = new Lazy<Operator>(() => new Operator(this));
+            _preparedquery = new Lazy<PreparedQuery>(() => new PreparedQuery(this));
+            _raw = new Lazy<Raw>(() => new Raw(this));
+            _session = new Lazy<Session>(() => new Session(this));
+            _snapshot = new Lazy<Snapshot>(() => new Snapshot(this));
+            _status = new Lazy<Status>(() => new Status(this));
         }
 
         #region IDisposable Support
@@ -468,13 +703,9 @@ namespace Consul
                 if (disposing)
                 {
                     Config.Updated -= HandleConfigUpdateEvent;
-                    if (HttpClient != null && !skipClientDispose)
+                    if (ConfigContainer != null)
                     {
-                        HttpClient.Dispose();
-                    }
-                    if (Handler != null)
-                    {
-                        Handler.Dispose();
+                        ConfigContainer.Dispose();
                     }
                 }
 
@@ -507,49 +738,99 @@ namespace Consul
 
         void HandleConfigUpdateEvent(object sender, EventArgs e)
         {
-            ApplyConfig(sender as ConsulClientConfiguration);
+            ApplyConfig(sender as ConsulClientConfiguration, HttpHandler, HttpClient);
 
         }
-        void ApplyConfig(ConsulClientConfiguration config)
+#if !CORECLR
+        void ApplyConfig(ConsulClientConfiguration config, WebRequestHandler handler, HttpClient client)
+#else
+        void ApplyConfig(ConsulClientConfiguration config, HttpClientHandler handler, HttpClient client)
+#endif        
         {
-            var handler = (Handler as WebRequestHandler);
+#pragma warning disable CS0618 // Type or member is obsolete
             if (config.HttpAuth != null)
+#pragma warning restore CS0618 // Type or member is obsolete
             {
+#pragma warning disable CS0618 // Type or member is obsolete
                 handler.Credentials = config.HttpAuth;
+#pragma warning restore CS0618 // Type or member is obsolete
             }
-            if (config.ClientCertificate != null)
+#if !__MonoCS__
+            if (config.ClientCertificateSupported)
             {
-                handler.ClientCertificateOptions = ClientCertificateOption.Manual;
-                handler.ClientCertificates.Add(config.ClientCertificate);
+#pragma warning disable CS0618 // Type or member is obsolete
+                if (config.ClientCertificate != null)
+#pragma warning restore CS0618 // Type or member is obsolete
+                {
+                    handler.ClientCertificateOptions = ClientCertificateOption.Manual;
+#pragma warning disable CS0618 // Type or member is obsolete
+                    handler.ClientCertificates.Add(config.ClientCertificate);
+#pragma warning restore CS0618 // Type or member is obsolete
+                }
+                else
+                {
+                    handler.ClientCertificateOptions = ClientCertificateOption.Manual;
+                    handler.ClientCertificates.Clear();
+                }
             }
-            else
-            {
-                handler.ClientCertificateOptions = ClientCertificateOption.Manual;
-                handler.ClientCertificates.Clear();
-            }
+#endif
+#if !CORECLR
+#pragma warning disable CS0618 // Type or member is obsolete
             if (config.DisableServerCertificateValidation)
+#pragma warning restore CS0618 // Type or member is obsolete
             {
-                handler.ServerCertificateValidationCallback += (certSender, cert, chain, sslPolicyErrors) => true;
+                handler.ServerCertificateValidationCallback += (certSender, cert, chain, sslPolicyErrors) => { return true; };
             }
             else
             {
                 handler.ServerCertificateValidationCallback = null;
             }
+#else
+#pragma warning disable CS0618 // Type or member is obsolete
+            if (config.DisableServerCertificateValidation)
+#pragma warning restore CS0618 // Type or member is obsolete
+            {
+                handler.ServerCertificateCustomValidationCallback += (certSender, cert, chain, sslPolicyErrors) => { return true; };
+            }
+            else
+            {
+                handler.ServerCertificateCustomValidationCallback = null;
+            }
+#endif
+
+            if (!string.IsNullOrEmpty(config.Token))
+            {
+                if (client.DefaultRequestHeaders.Contains("X-Consul-Token"))
+                {
+                    client.DefaultRequestHeaders.Remove("X-Consul-Token");
+                }
+                client.DefaultRequestHeaders.Add("X-Consul-Token", config.Token);
+            }
         }
 
-        internal GetRequest<T> Get<T>(string path, QueryOptions opts = null)
+        internal GetRequest<TOut> Get<TOut>(string path, QueryOptions opts = null)
         {
-            return new GetRequest<T>(this, path, opts ?? QueryOptions.Default);
+            return new GetRequest<TOut>(this, path, opts ?? QueryOptions.Default);
         }
 
-        internal DeleteRequest<T> Delete<T>(string path, WriteOptions opts = null)
+        internal DeleteReturnRequest<TOut> DeleteReturning<TOut>(string path, WriteOptions opts = null)
         {
-            return new DeleteRequest<T>(this, path, opts ?? WriteOptions.Default);
+            return new DeleteReturnRequest<TOut>(this, path, opts ?? WriteOptions.Default);
         }
 
-        internal EmptyPutRequest<TOut> EmptyPut<TOut>(string path, WriteOptions opts = null)
+        internal DeleteRequest Delete(string path, WriteOptions opts = null)
         {
-            return new EmptyPutRequest<TOut>(this, path, opts ?? WriteOptions.Default);
+            return new DeleteRequest(this, path, opts ?? WriteOptions.Default);
+        }
+
+        internal DeleteAcceptingRequest<TIn> DeleteAccepting<TIn>(string path, TIn body, WriteOptions opts = null)
+        {
+            return new DeleteAcceptingRequest<TIn>(this, path, body, opts ?? WriteOptions.Default);
+        }
+
+        internal PutReturningRequest<TOut> PutReturning<TOut>(string path, WriteOptions opts = null)
+        {
+            return new PutReturningRequest<TOut>(this, path, opts ?? WriteOptions.Default);
         }
 
         internal PutRequest<TIn> Put<TIn>(string path, TIn body, WriteOptions opts = null)
@@ -557,14 +838,19 @@ namespace Consul
             return new PutRequest<TIn>(this, path, body, opts ?? WriteOptions.Default);
         }
 
-        internal SilentPutRequest Put(string path, WriteOptions opts = null)
+        internal PutNothingRequest PutNothing(string path, WriteOptions opts = null)
         {
-            return new SilentPutRequest(this, path, opts ?? WriteOptions.Default);
+            return new PutNothingRequest(this, path, opts ?? WriteOptions.Default);
         }
 
         internal PutRequest<TIn, TOut> Put<TIn, TOut>(string path, TIn body, WriteOptions opts = null)
         {
             return new PutRequest<TIn, TOut>(this, path, body, opts ?? WriteOptions.Default);
+        }
+
+        internal PostRequest<TIn> Post<TIn>(string path, TIn body, WriteOptions opts = null)
+        {
+            return new PostRequest<TIn>(this, path, body, opts ?? WriteOptions.Default);
         }
 
         internal PostRequest<TIn, TOut> Post<TIn, TOut>(string path, TIn body, WriteOptions opts = null)
@@ -598,20 +884,17 @@ namespace Consul
             {
                 Params["wait"] = client.Config.WaitTime.Value.ToGoDuration();
             }
-            if (!string.IsNullOrEmpty(client.Config.Token))
-            {
-                Params["token"] = client.Config.Token;
-            }
         }
 
-        protected abstract void ApplyOptions();
+        protected abstract void ApplyOptions(ConsulClientConfiguration clientConfig);
+        protected abstract void ApplyHeaders(HttpRequestMessage message, ConsulClientConfiguration clientConfig);
 
         protected Uri BuildConsulUri(string url, Dictionary<string, string> p)
         {
             var builder = new UriBuilder(Client.Config.Address);
             builder.Path = url;
 
-            ApplyOptions();
+            ApplyOptions(Client.Config);
 
             var queryParams = new List<string>(Params.Count / 2);
             foreach (var queryParam in Params)
@@ -647,7 +930,8 @@ namespace Consul
             return System.Text.Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(value));
         }
     }
-    public class GetRequest<T> : ConsulRequest
+
+    public class GetRequest<TOut> : ConsulRequest
     {
         public QueryOptions Options { get; set; }
 
@@ -655,19 +939,19 @@ namespace Consul
         {
             if (string.IsNullOrEmpty(url))
             {
-                throw new ArgumentException(url);
+                throw new ArgumentException(nameof(url));
             }
             Options = options ?? QueryOptions.Default;
         }
 
-        public Task<QueryResult<T>> Execute() { return Execute(CancellationToken.None); }
-        public async Task<QueryResult<T>> Execute(CancellationToken ct)
+        public async Task<QueryResult<TOut>> Execute(CancellationToken ct)
         {
             Client.CheckDisposed();
             timer.Start();
-            var result = new QueryResult<T>();
+            var result = new QueryResult<TOut>();
 
             var message = new HttpRequestMessage(HttpMethod.Get, BuildConsulUri(Endpoint, Params));
+            ApplyHeaders(message, Client.Config);
             var response = await Client.HttpClient.SendAsync(message, ct).ConfigureAwait(false);
 
             ParseQueryHeaders(response, result);
@@ -679,18 +963,18 @@ namespace Consul
                 if (ResponseStream == null)
                 {
                     throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode));
+                        response.StatusCode), response.StatusCode);
                 }
                 using (var sr = new StreamReader(ResponseStream))
                 {
                     throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()));
+                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
                 }
             }
 
             if (response.IsSuccessStatusCode)
             {
-                result.Response = Deserialize<T>(ResponseStream);
+                result.Response = Deserialize<TOut>(ResponseStream);
             }
 
             result.RequestTime = timer.Elapsed;
@@ -699,7 +983,35 @@ namespace Consul
             return result;
         }
 
-        protected override void ApplyOptions()
+        public async Task<QueryResult<Stream>> ExecuteStreaming(CancellationToken ct)
+        {
+            Client.CheckDisposed();
+            timer.Start();
+            var result = new QueryResult<Stream>();
+
+            var message = new HttpRequestMessage(HttpMethod.Get, BuildConsulUri(Endpoint, Params));
+            ApplyHeaders(message, Client.Config);
+            var response = await Client.HttpClient.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+
+            ParseQueryHeaders(response, (result as QueryResult<TOut>));
+            result.StatusCode = response.StatusCode;
+            ResponseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+
+            result.Response = ResponseStream;
+
+            if (response.StatusCode != HttpStatusCode.NotFound && !response.IsSuccessStatusCode)
+            {
+                throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
+                    response.StatusCode), response.StatusCode);
+            }
+
+            result.RequestTime = timer.Elapsed;
+            timer.Stop();
+
+            return result;
+        }
+
+        protected override void ApplyOptions(ConsulClientConfiguration clientConfig)
         {
             if (Options == QueryOptions.Default)
             {
@@ -729,17 +1041,13 @@ namespace Consul
             {
                 Params["wait"] = Options.WaitTime.Value.ToGoDuration();
             }
-            if (!string.IsNullOrEmpty(Options.Token))
-            {
-                Params["token"] = Options.Token;
-            }
             if (!string.IsNullOrEmpty(Options.Near))
             {
                 Params["near"] = Options.Near;
             }
         }
 
-        protected void ParseQueryHeaders(HttpResponseMessage res, QueryResult<T> meta)
+        protected void ParseQueryHeaders(HttpResponseMessage res, QueryResult<TOut> meta)
         {
             var headers = res.Headers;
 
@@ -751,7 +1059,7 @@ namespace Consul
                 }
                 catch (Exception ex)
                 {
-                    throw new ConsulRequestException("Failed to parse X-Consul-Index", ex);
+                    throw new ConsulRequestException("Failed to parse X-Consul-Index", res.StatusCode, ex);
                 }
             }
 
@@ -763,7 +1071,7 @@ namespace Consul
                 }
                 catch (Exception ex)
                 {
-                    throw new ConsulRequestException("Failed to parse X-Consul-LastContact", ex);
+                    throw new ConsulRequestException("Failed to parse X-Consul-LastContact", res.StatusCode, ex);
                 }
             }
 
@@ -775,13 +1083,107 @@ namespace Consul
                 }
                 catch (Exception ex)
                 {
-                    throw new ConsulRequestException("Failed to parse X-Consul-KnownLeader", ex);
+                    throw new ConsulRequestException("Failed to parse X-Consul-KnownLeader", res.StatusCode, ex);
                 }
+            }
+
+            if (headers.Contains("X-Consul-Translate-Addresses"))
+            {
+                try
+                {
+                    meta.AddressTranslationEnabled = bool.Parse(headers.GetValues("X-Consul-Translate-Addresses").First());
+                }
+                catch (Exception ex)
+                {
+                    throw new ConsulRequestException("Failed to parse X-Consul-Translate-Addresses", res.StatusCode, ex);
+                }
+            }
+        }
+
+        protected override void ApplyHeaders(HttpRequestMessage message, ConsulClientConfiguration clientConfig)
+        {
+            if (!string.IsNullOrEmpty(Options.Token))
+            {
+                message.Headers.Add("X-Consul-Token", Options.Token);
             }
         }
     }
 
-    public class DeleteRequest<TOut> : ConsulRequest
+    public class DeleteReturnRequest<TOut> : ConsulRequest
+    {
+        public WriteOptions Options { get; set; }
+
+        public DeleteReturnRequest(ConsulClient client, string url, WriteOptions options = null) : base(client, url, HttpMethod.Delete)
+        {
+            if (string.IsNullOrEmpty(url))
+            {
+                throw new ArgumentException(nameof(url));
+            }
+            Options = options ?? WriteOptions.Default;
+        }
+
+        public async Task<WriteResult<TOut>> Execute(CancellationToken ct)
+        {
+            Client.CheckDisposed();
+            timer.Start();
+            var result = new WriteResult<TOut>();
+
+            var message = new HttpRequestMessage(HttpMethod.Delete, BuildConsulUri(Endpoint, Params));
+            ApplyHeaders(message, Client.Config);
+            var response = await Client.HttpClient.SendAsync(message, ct).ConfigureAwait(false);
+
+            result.StatusCode = response.StatusCode;
+
+            ResponseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+
+            if (response.StatusCode != HttpStatusCode.NotFound && !response.IsSuccessStatusCode)
+            {
+                if (ResponseStream == null)
+                {
+                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
+                        response.StatusCode), response.StatusCode);
+                }
+                using (var sr = new StreamReader(ResponseStream))
+                {
+                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
+                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
+                }
+            }
+
+            if (response.IsSuccessStatusCode)
+            {
+                result.Response = Deserialize<TOut>(ResponseStream);
+            }
+
+            result.RequestTime = timer.Elapsed;
+            timer.Stop();
+
+            return result;
+        }
+
+        protected override void ApplyOptions(ConsulClientConfiguration clientConfig)
+        {
+            if (Options == WriteOptions.Default)
+            {
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(Options.Datacenter))
+            {
+                Params["dc"] = Options.Datacenter;
+            }
+        }
+
+        protected override void ApplyHeaders(HttpRequestMessage message, ConsulClientConfiguration clientConfig)
+        {
+            if (!string.IsNullOrEmpty(Options.Token))
+            {
+                message.Headers.Add("X-Consul-Token", Options.Token);
+            }
+        }
+    }
+
+    public class DeleteRequest : ConsulRequest
     {
         public WriteOptions Options { get; set; }
 
@@ -789,157 +1191,20 @@ namespace Consul
         {
             if (string.IsNullOrEmpty(url))
             {
-                throw new ArgumentException(url);
+                throw new ArgumentException(nameof(url));
             }
             Options = options ?? WriteOptions.Default;
         }
 
-        public Task<WriteResult<TOut>> Execute() { return Execute(CancellationToken.None); }
-        public async Task<WriteResult<TOut>> Execute(CancellationToken ct)
-        {
-            Client.CheckDisposed();
-            timer.Start();
-            var result = new WriteResult<TOut>();
-
-            var response = await Client.HttpClient.DeleteAsync(BuildConsulUri(Endpoint, Params), ct).ConfigureAwait(false);
-
-            result.StatusCode = response.StatusCode;
-
-            ResponseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-
-            if (response.StatusCode != HttpStatusCode.NotFound && !response.IsSuccessStatusCode)
-            {
-                if (ResponseStream == null)
-                {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode));
-                }
-                using (var sr = new StreamReader(ResponseStream))
-                {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()));
-                }
-            }
-
-            if (response.IsSuccessStatusCode)
-            {
-                result.Response = Deserialize<TOut>(ResponseStream);
-            }
-
-            result.RequestTime = timer.Elapsed;
-            timer.Stop();
-
-            return result;
-        }
-
-        protected override void ApplyOptions()
-        {
-            if (Options == WriteOptions.Default)
-            {
-                return;
-            }
-
-            if (!string.IsNullOrEmpty(Options.Datacenter))
-            {
-                Params["dc"] = Options.Datacenter;
-            }
-            if (!string.IsNullOrEmpty(Options.Token))
-            {
-                Params["token"] = Options.Token;
-            }
-        }
-    }
-
-    public class EmptyPutRequest<TOut> : ConsulRequest
-    {
-        public WriteOptions Options { get; set; }
-
-        public EmptyPutRequest(ConsulClient client, string url, WriteOptions options = null) : base(client, url, HttpMethod.Put)
-        {
-            if (string.IsNullOrEmpty(url))
-            {
-                throw new ArgumentException(url);
-            }
-            Options = options ?? WriteOptions.Default;
-        }
-
-        public Task<WriteResult<TOut>> Execute() { return Execute(CancellationToken.None); }
-        public async Task<WriteResult<TOut>> Execute(CancellationToken ct)
-        {
-            Client.CheckDisposed();
-            timer.Start();
-            var result = new WriteResult<TOut>();
-
-            var response = await Client.HttpClient.PutAsync(BuildConsulUri(Endpoint, Params), null, ct).ConfigureAwait(false);
-
-            result.StatusCode = response.StatusCode;
-
-            ResponseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-
-            if (response.StatusCode != HttpStatusCode.NotFound && !response.IsSuccessStatusCode)
-            {
-                if (ResponseStream == null)
-                {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode));
-                }
-                using (var sr = new StreamReader(ResponseStream))
-                {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()));
-                }
-            }
-
-            if (response.IsSuccessStatusCode)
-            {
-                result.Response = Deserialize<TOut>(ResponseStream);
-            }
-
-            result.RequestTime = timer.Elapsed;
-            timer.Stop();
-
-            return result;
-        }
-
-        protected override void ApplyOptions()
-        {
-            if (Options == WriteOptions.Default)
-            {
-                return;
-            }
-
-            if (!string.IsNullOrEmpty(Options.Datacenter))
-            {
-                Params["dc"] = Options.Datacenter;
-            }
-            if (!string.IsNullOrEmpty(Options.Token))
-            {
-                Params["token"] = Options.Token;
-            }
-        }
-    }
-
-    public class SilentPutRequest : ConsulRequest
-    {
-        public WriteOptions Options { get; set; }
-
-        public SilentPutRequest(ConsulClient client, string url, WriteOptions options = null) : base(client, url, HttpMethod.Put)
-        {
-            if (string.IsNullOrEmpty(url))
-            {
-                throw new ArgumentException(url);
-            }
-            Options = options ?? WriteOptions.Default;
-        }
-
-        public Task<WriteResult> Execute() { return Execute(CancellationToken.None); }
         public async Task<WriteResult> Execute(CancellationToken ct)
         {
             Client.CheckDisposed();
             timer.Start();
             var result = new WriteResult();
 
-            var response = await Client.HttpClient.PutAsync(BuildConsulUri(Endpoint, Params), null, ct).ConfigureAwait(false);
+            var message = new HttpRequestMessage(HttpMethod.Delete, BuildConsulUri(Endpoint, Params));
+            ApplyHeaders(message, Client.Config);
+            var response = await Client.HttpClient.SendAsync(message, ct).ConfigureAwait(false);
 
             result.StatusCode = response.StatusCode;
 
@@ -950,12 +1215,12 @@ namespace Consul
                 if (ResponseStream == null)
                 {
                     throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode));
+                        response.StatusCode), response.StatusCode);
                 }
                 using (var sr = new StreamReader(ResponseStream))
                 {
                     throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()));
+                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
                 }
             }
 
@@ -965,7 +1230,7 @@ namespace Consul
             return result;
         }
 
-        protected override void ApplyOptions()
+        protected override void ApplyOptions(ConsulClientConfiguration clientConfig)
         {
             if (Options == WriteOptions.Default)
             {
@@ -976,9 +1241,243 @@ namespace Consul
             {
                 Params["dc"] = Options.Datacenter;
             }
+        }
+
+        protected override void ApplyHeaders(HttpRequestMessage message, ConsulClientConfiguration clientConfig)
+        {
             if (!string.IsNullOrEmpty(Options.Token))
             {
-                Params["token"] = Options.Token;
+                message.Headers.Add("X-Consul-Token", Options.Token);
+            }
+        }
+    }
+
+    public class DeleteAcceptingRequest<TIn> : ConsulRequest
+    {
+        public WriteOptions Options { get; set; }
+        private TIn _body;
+
+        public DeleteAcceptingRequest(ConsulClient client, string url, TIn body, WriteOptions options = null) : base(client, url, HttpMethod.Delete)
+        {
+            if (string.IsNullOrEmpty(url))
+            {
+                throw new ArgumentException(nameof(url));
+            }
+            _body = body;
+            Options = options ?? WriteOptions.Default;
+        }
+
+        public async Task<WriteResult> Execute(CancellationToken ct)
+        {
+            Client.CheckDisposed();
+            var result = new WriteResult();
+
+            HttpContent content;
+
+            if (typeof(TIn) == typeof(byte[]))
+            {
+                content = new ByteArrayContent((_body as byte[]) ?? new byte[0]);
+            }
+            else if (typeof(TIn) == typeof(Stream))
+            {
+                content = new StreamContent((_body as Stream) ?? new MemoryStream());
+            }
+            else
+            {
+                content = new ByteArrayContent(Serialize(_body));
+            }
+
+            var message = new HttpRequestMessage(HttpMethod.Delete, BuildConsulUri(Endpoint, Params));
+            ApplyHeaders(message, Client.Config);
+            message.Content = content;
+
+            var response = await Client.HttpClient.SendAsync(message, ct).ConfigureAwait(false);
+
+            result.StatusCode = response.StatusCode;
+
+            ResponseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+
+            if (response.StatusCode != HttpStatusCode.NotFound && !response.IsSuccessStatusCode)
+            {
+                if (ResponseStream == null)
+                {
+                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
+                        response.StatusCode), response.StatusCode);
+                }
+                using (var sr = new StreamReader(ResponseStream))
+                {
+                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
+                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
+                }
+            }
+
+            result.RequestTime = timer.Elapsed;
+            timer.Stop();
+
+            return result;
+        }
+
+        protected override void ApplyOptions(ConsulClientConfiguration clientConfig)
+        {
+            if (Options == WriteOptions.Default)
+            {
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(Options.Datacenter))
+            {
+                Params["dc"] = Options.Datacenter;
+            }
+        }
+
+        protected override void ApplyHeaders(HttpRequestMessage message, ConsulClientConfiguration clientConfig)
+        {
+            if (!string.IsNullOrEmpty(Options.Token))
+            {
+                message.Headers.Add("X-Consul-Token", Options.Token);
+            }
+        }
+    }
+
+    public class PutReturningRequest<TOut> : ConsulRequest
+    {
+        public WriteOptions Options { get; set; }
+
+        public PutReturningRequest(ConsulClient client, string url, WriteOptions options = null) : base(client, url, HttpMethod.Put)
+        {
+            if (string.IsNullOrEmpty(url))
+            {
+                throw new ArgumentException(nameof(url));
+            }
+            Options = options ?? WriteOptions.Default;
+        }
+
+        public async Task<WriteResult<TOut>> Execute(CancellationToken ct)
+        {
+            Client.CheckDisposed();
+            timer.Start();
+            var result = new WriteResult<TOut>();
+
+            var message = new HttpRequestMessage(HttpMethod.Put, BuildConsulUri(Endpoint, Params));
+            ApplyHeaders(message, Client.Config);
+            var response = await Client.HttpClient.SendAsync(message, ct).ConfigureAwait(false);
+
+            result.StatusCode = response.StatusCode;
+
+            ResponseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+
+            if (response.StatusCode != HttpStatusCode.NotFound && !response.IsSuccessStatusCode)
+            {
+                if (ResponseStream == null)
+                {
+                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
+                        response.StatusCode), response.StatusCode);
+                }
+                using (var sr = new StreamReader(ResponseStream))
+                {
+                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
+                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
+                }
+            }
+
+            if (response.IsSuccessStatusCode)
+            {
+                result.Response = Deserialize<TOut>(ResponseStream);
+            }
+
+            result.RequestTime = timer.Elapsed;
+            timer.Stop();
+
+            return result;
+        }
+
+        protected override void ApplyOptions(ConsulClientConfiguration clientConfig)
+        {
+            if (Options == WriteOptions.Default)
+            {
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(Options.Datacenter))
+            {
+                Params["dc"] = Options.Datacenter;
+            }
+        }
+
+        protected override void ApplyHeaders(HttpRequestMessage message, ConsulClientConfiguration clientConfig)
+        {
+            if (!string.IsNullOrEmpty(Options.Token))
+            {
+                message.Headers.Add("X-Consul-Token", Options.Token);
+            }
+        }
+    }
+
+    public class PutNothingRequest : ConsulRequest
+    {
+        public WriteOptions Options { get; set; }
+
+        public PutNothingRequest(ConsulClient client, string url, WriteOptions options = null) : base(client, url, HttpMethod.Put)
+        {
+            if (string.IsNullOrEmpty(url))
+            {
+                throw new ArgumentException(nameof(url));
+            }
+            Options = options ?? WriteOptions.Default;
+        }
+
+        public async Task<WriteResult> Execute(CancellationToken ct)
+        {
+            Client.CheckDisposed();
+            timer.Start();
+            var result = new WriteResult();
+
+            var message = new HttpRequestMessage(HttpMethod.Put, BuildConsulUri(Endpoint, Params));
+            ApplyHeaders(message, Client.Config);
+            var response = await Client.HttpClient.SendAsync(message, ct).ConfigureAwait(false);
+
+            result.StatusCode = response.StatusCode;
+
+            ResponseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+
+            if (response.StatusCode != HttpStatusCode.NotFound && !response.IsSuccessStatusCode)
+            {
+                if (ResponseStream == null)
+                {
+                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
+                        response.StatusCode), response.StatusCode);
+                }
+                using (var sr = new StreamReader(ResponseStream))
+                {
+                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
+                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
+                }
+            }
+
+            result.RequestTime = timer.Elapsed;
+            timer.Stop();
+
+            return result;
+        }
+
+        protected override void ApplyOptions(ConsulClientConfiguration clientConfig)
+        {
+            if (Options == WriteOptions.Default)
+            {
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(Options.Datacenter))
+            {
+                Params["dc"] = Options.Datacenter;
+            }
+        }
+
+        protected override void ApplyHeaders(HttpRequestMessage message, ConsulClientConfiguration clientConfig)
+        {
+            if (!string.IsNullOrEmpty(Options.Token))
+            {
+                message.Headers.Add("X-Consul-Token", Options.Token);
             }
         }
     }
@@ -988,19 +1487,16 @@ namespace Consul
         public WriteOptions Options { get; set; }
         private TIn _body;
 
-        private readonly bool UseRawRequestBody = typeof(TIn) == typeof(byte[]);
-
         public PutRequest(ConsulClient client, string url, TIn body, WriteOptions options = null) : base(client, url, HttpMethod.Put)
         {
             if (string.IsNullOrEmpty(url))
             {
-                throw new ArgumentException(url);
+                throw new ArgumentException(nameof(url));
             }
             _body = body;
             Options = options ?? WriteOptions.Default;
         }
 
-        public Task<WriteResult> Execute() { return Execute(CancellationToken.None); }
         public async Task<WriteResult> Execute(CancellationToken ct)
         {
             Client.CheckDisposed();
@@ -1009,16 +1505,24 @@ namespace Consul
 
             HttpContent content;
 
-            if (UseRawRequestBody)
+            if (typeof(TIn) == typeof(byte[]))
             {
                 content = new ByteArrayContent((_body as byte[]) ?? new byte[0]);
+            }
+            else if (typeof(TIn) == typeof(Stream))
+            {
+                content = new StreamContent((_body as Stream) ?? new MemoryStream());
             }
             else
             {
                 content = new ByteArrayContent(Serialize(_body));
             }
 
-            var response = await Client.HttpClient.PutAsync(BuildConsulUri(Endpoint, Params), content, ct).ConfigureAwait(false);
+            var message = new HttpRequestMessage(HttpMethod.Put, BuildConsulUri(Endpoint, Params));
+            ApplyHeaders(message, Client.Config);
+            message.Content = content;
+
+            var response = await Client.HttpClient.SendAsync(message, ct).ConfigureAwait(false);
 
             result.StatusCode = response.StatusCode;
 
@@ -1029,12 +1533,12 @@ namespace Consul
                 if (ResponseStream == null)
                 {
                     throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode));
+                        response.StatusCode), response.StatusCode);
                 }
                 using (var sr = new StreamReader(ResponseStream))
                 {
                     throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()));
+                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
                 }
             }
 
@@ -1044,7 +1548,7 @@ namespace Consul
             return result;
         }
 
-        protected override void ApplyOptions()
+        protected override void ApplyOptions(ConsulClientConfiguration clientConfig)
         {
             if (Options == WriteOptions.Default)
             {
@@ -1055,9 +1559,13 @@ namespace Consul
             {
                 Params["dc"] = Options.Datacenter;
             }
+        }
+
+        protected override void ApplyHeaders(HttpRequestMessage message, ConsulClientConfiguration clientConfig)
+        {
             if (!string.IsNullOrEmpty(Options.Token))
             {
-                Params["token"] = Options.Token;
+                message.Headers.Add("X-Consul-Token", Options.Token);
             }
         }
     }
@@ -1067,19 +1575,16 @@ namespace Consul
         public WriteOptions Options { get; set; }
         private TIn _body;
 
-        private readonly bool UseRawRequestBody = typeof(TIn) == typeof(byte[]);
-
         public PutRequest(ConsulClient client, string url, TIn body, WriteOptions options = null) : base(client, url, HttpMethod.Put)
         {
             if (string.IsNullOrEmpty(url))
             {
-                throw new ArgumentException(url);
+                throw new ArgumentException(nameof(url));
             }
             _body = body;
             Options = options ?? WriteOptions.Default;
         }
 
-        public Task<WriteResult<TOut>> Execute() { return Execute(CancellationToken.None); }
         public async Task<WriteResult<TOut>> Execute(CancellationToken ct)
         {
             Client.CheckDisposed();
@@ -1088,11 +1593,12 @@ namespace Consul
 
             HttpContent content = null;
 
-            if (UseRawRequestBody)
+            if (typeof(TIn) == typeof(byte[]))
             {
-                if (_body != null)
+                var bodyBytes = (_body as byte[]);
+                if (bodyBytes != null)
                 {
-                    content = new ByteArrayContent((_body as byte[]) ?? new byte[0]);
+                    content = new ByteArrayContent(bodyBytes);
                 }
                 // If body is null and should be a byte array, then just don't send anything.
             }
@@ -1101,27 +1607,34 @@ namespace Consul
                 content = new ByteArrayContent(Serialize(_body));
             }
 
-            var response = await Client.HttpClient.PutAsync(BuildConsulUri(Endpoint, Params), content, ct).ConfigureAwait(false);
+            var message = new HttpRequestMessage(HttpMethod.Put, BuildConsulUri(Endpoint, Params));
+            ApplyHeaders(message, Client.Config);
+            message.Content = content;
+            var response = await Client.HttpClient.SendAsync(message, ct).ConfigureAwait(false);
 
             result.StatusCode = response.StatusCode;
 
             ResponseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
 
-            if (response.StatusCode != HttpStatusCode.NotFound && !response.IsSuccessStatusCode)
+            if (!response.IsSuccessStatusCode && (
+                (response.StatusCode != HttpStatusCode.NotFound && typeof(TOut) != typeof(TxnResponse)) ||
+                (response.StatusCode != HttpStatusCode.Conflict && typeof(TOut) == typeof(TxnResponse))))
             {
                 if (ResponseStream == null)
                 {
                     throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode));
+                        response.StatusCode), response.StatusCode);
                 }
                 using (var sr = new StreamReader(ResponseStream))
                 {
                     throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()));
+                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
                 }
             }
 
-            if (response.IsSuccessStatusCode)
+            if (response.IsSuccessStatusCode ||
+                // Special case for KV txn operations
+                (response.StatusCode == HttpStatusCode.Conflict && typeof(TOut) == typeof(TxnResponse)))
             {
                 result.Response = Deserialize<TOut>(ResponseStream);
             }
@@ -1132,7 +1645,7 @@ namespace Consul
             return result;
         }
 
-        protected override void ApplyOptions()
+        protected override void ApplyOptions(ConsulClientConfiguration clientConfig)
         {
             if (Options == WriteOptions.Default)
             {
@@ -1143,32 +1656,120 @@ namespace Consul
             {
                 Params["dc"] = Options.Datacenter;
             }
+        }
+
+        protected override void ApplyHeaders(HttpRequestMessage message, ConsulClientConfiguration clientConfig)
+        {
             if (!string.IsNullOrEmpty(Options.Token))
             {
-                Params["token"] = Options.Token;
+                message.Headers.Add("X-Consul-Token", Options.Token);
             }
         }
     }
 
+    public class PostRequest<TIn> : ConsulRequest
+    {
+        public WriteOptions Options { get; set; }
+        private TIn _body;
+
+        public PostRequest(ConsulClient client, string url, TIn body, WriteOptions options = null) : base(client, url, HttpMethod.Post)
+        {
+            if (string.IsNullOrEmpty(url))
+            {
+                throw new ArgumentException(nameof(url));
+            }
+            _body = body;
+            Options = options ?? WriteOptions.Default;
+        }
+
+        public async Task<WriteResult> Execute(CancellationToken ct)
+        {
+            Client.CheckDisposed();
+            timer.Start();
+            var result = new WriteResult();
+
+            HttpContent content = null;
+
+            if (typeof(TIn) == typeof(byte[]))
+            {
+                var bodyBytes = (_body as byte[]);
+                if (bodyBytes != null)
+                {
+                    content = new ByteArrayContent(bodyBytes);
+                }
+                // If body is null and should be a byte array, then just don't send anything.
+            }
+            else
+            {
+                content = new ByteArrayContent(Serialize(_body));
+            }
+
+            var message = new HttpRequestMessage(HttpMethod.Post, BuildConsulUri(Endpoint, Params));
+            ApplyHeaders(message, Client.Config);
+            message.Content = content;
+            var response = await Client.HttpClient.SendAsync(message, ct).ConfigureAwait(false);
+
+            result.StatusCode = response.StatusCode;
+
+            ResponseStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+
+            if (response.StatusCode != HttpStatusCode.NotFound && !response.IsSuccessStatusCode)
+            {
+                if (ResponseStream == null)
+                {
+                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
+                        response.StatusCode), response.StatusCode);
+                }
+                using (var sr = new StreamReader(ResponseStream))
+                {
+                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
+                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
+                }
+            }
+
+            result.RequestTime = timer.Elapsed;
+            timer.Stop();
+
+            return result;
+        }
+
+        protected override void ApplyOptions(ConsulClientConfiguration clientConfig)
+        {
+            if (Options == WriteOptions.Default)
+            {
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(Options.Datacenter))
+            {
+                Params["dc"] = Options.Datacenter;
+            }
+        }
+
+        protected override void ApplyHeaders(HttpRequestMessage message, ConsulClientConfiguration clientConfig)
+        {
+            if (!string.IsNullOrEmpty(Options.Token))
+            {
+                message.Headers.Add("X-Consul-Token", Options.Token);
+            }
+        }
+    }
 
     public class PostRequest<TIn, TOut> : ConsulRequest
     {
         public WriteOptions Options { get; set; }
         private TIn _body;
 
-        private readonly bool UseRawRequestBody = typeof(TIn) == typeof(byte[]);
-
         public PostRequest(ConsulClient client, string url, TIn body, WriteOptions options = null) : base(client, url, HttpMethod.Post)
         {
             if (string.IsNullOrEmpty(url))
             {
-                throw new ArgumentException(url);
+                throw new ArgumentException(nameof(url));
             }
             _body = body;
             Options = options ?? WriteOptions.Default;
         }
 
-        public Task<WriteResult<TOut>> Execute() { return Execute(CancellationToken.None); }
         public async Task<WriteResult<TOut>> Execute(CancellationToken ct)
         {
             Client.CheckDisposed();
@@ -1177,11 +1778,12 @@ namespace Consul
 
             HttpContent content = null;
 
-            if (UseRawRequestBody)
+            if (typeof(TIn) == typeof(byte[]))
             {
-                if (_body != null)
+                var bodyBytes = (_body as byte[]);
+                if (bodyBytes != null)
                 {
-                    content = new ByteArrayContent((_body as byte[]) ?? new byte[0]);
+                    content = new ByteArrayContent(bodyBytes);
                 }
                 // If body is null and should be a byte array, then just don't send anything.
             }
@@ -1190,7 +1792,10 @@ namespace Consul
                 content = new ByteArrayContent(Serialize(_body));
             }
 
-            var response = await Client.HttpClient.PostAsync(BuildConsulUri(Endpoint, Params), content, ct).ConfigureAwait(false);
+            var message = new HttpRequestMessage(HttpMethod.Post, BuildConsulUri(Endpoint, Params));
+            ApplyHeaders(message, Client.Config);
+            message.Content = content;
+            var response = await Client.HttpClient.SendAsync(message, ct).ConfigureAwait(false);
 
             result.StatusCode = response.StatusCode;
 
@@ -1201,12 +1806,12 @@ namespace Consul
                 if (ResponseStream == null)
                 {
                     throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode));
+                        response.StatusCode), response.StatusCode);
                 }
                 using (var sr = new StreamReader(ResponseStream))
                 {
                     throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()));
+                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
                 }
             }
 
@@ -1221,7 +1826,7 @@ namespace Consul
             return result;
         }
 
-        protected override void ApplyOptions()
+        protected override void ApplyOptions(ConsulClientConfiguration clientConfig)
         {
             if (Options == WriteOptions.Default)
             {
@@ -1232,9 +1837,13 @@ namespace Consul
             {
                 Params["dc"] = Options.Datacenter;
             }
+        }
+
+        protected override void ApplyHeaders(HttpRequestMessage message, ConsulClientConfiguration clientConfig)
+        {
             if (!string.IsNullOrEmpty(Options.Token))
             {
-                Params["token"] = Options.Token;
+                message.Headers.Add("X-Consul-Token", Options.Token);
             }
         }
     }

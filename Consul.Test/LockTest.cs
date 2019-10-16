@@ -26,8 +26,19 @@ using Xunit;
 namespace Consul.Test
 {
     [Trait("speed", "slow")]
-    public class LockTest
+    public class LockTest : IDisposable
     {
+        AsyncReaderWriterLock.Releaser m_lock;
+        public LockTest()
+        {
+            m_lock = AsyncHelpers.RunSync(() => SelectiveParallel.Parallel());
+        }
+
+        public void Dispose()
+        {
+            m_lock.Dispose();
+        }
+    
         [Fact]
         public async Task Lock_AcquireRelease()
         {
@@ -72,6 +83,57 @@ namespace Consul.Test
         }
 
         [Fact]
+        public void Lock_RetryRange()
+        {
+            Assert.Throws(typeof(ArgumentOutOfRangeException), () => new LockOptions("test/lock/retryrange")
+            {
+                LockRetryTime = TimeSpan.Zero
+            });
+        }
+
+        [Fact]
+        public void Lock_MultithreadedRelease()
+        {
+            const int numTasks = 100000;
+            using (var client = new ConsulClient())
+            {
+                const string keyName = "test/lock/acquirerelease";
+                var lockKey = client.CreateLock(keyName);
+                Task[] tasks = new Task[numTasks];
+
+                for (int i = 0; i < numTasks; i++)
+                {
+                    tasks[i] = lockKey.Acquire(CancellationToken.None);
+                }
+
+                try
+                {
+                    Task.WaitAll(tasks);
+                }
+                catch (AggregateException e)
+                {
+                    Assert.Equal(numTasks - 1, e.InnerExceptions.Count);
+                }
+
+                Assert.True(lockKey.IsHeld);
+
+                for (int i = 0; i < numTasks; i++)
+                {
+                    tasks[i] = lockKey.Release(CancellationToken.None);
+                }
+
+                try
+                {
+                    Task.WaitAll(tasks);
+                }
+                catch (AggregateException e)
+                {
+                    Assert.Equal(numTasks - 1, e.InnerExceptions.Count);
+                }
+            }
+        }
+
+        [Fact]
         public async Task Lock_OneShot()
         {
             var client = new ConsulClient();
@@ -83,30 +145,51 @@ namespace Consul.Test
 
             Assert.Equal(Lock.DefaultLockWaitTime, lockOptions.LockWaitTime);
 
-            lockOptions.LockWaitTime = TimeSpan.FromMilliseconds(250);
+            lockOptions.LockWaitTime = TimeSpan.FromMilliseconds(1000);
 
             var lockKey = client.CreateLock(lockOptions);
 
             await lockKey.Acquire(CancellationToken.None);
 
+
             var contender = client.CreateLock(new LockOptions(keyName)
             {
                 LockTryOnce = true,
-                LockWaitTime = TimeSpan.FromMilliseconds(250)
+                LockWaitTime = TimeSpan.FromMilliseconds(1000)
             });
 
-            Task.WaitAny(Task.Run(async () =>
-            {
-                await Assert.ThrowsAsync<LockMaxAttemptsReachedException>(async () => 
-                    await contender.Acquire()
-                );
-            }),
-            Task.Delay(2 * lockOptions.LockWaitTime.Milliseconds).ContinueWith((t) => Assert.True(false, "Took too long"))
-            );
+            var stopwatch = Stopwatch.StartNew();
+
+            Assert.True(lockKey.IsHeld);
+            Assert.False(contender.IsHeld);
+            Assert.NotEqual(WaitHandle.WaitTimeout, Task.WaitAny(
+                new Task[] { Task.Run(async () => { await Assert.ThrowsAsync<LockMaxAttemptsReachedException>(async () => await contender.Acquire()); }) },
+                (int)(2 * lockOptions.LockWaitTime.TotalMilliseconds)));
+
+            Assert.False(stopwatch.ElapsedMilliseconds < lockOptions.LockWaitTime.TotalMilliseconds);
+            Assert.False(contender.IsHeld, "Contender should have failed to acquire");
+
+            Assert.True(lockKey.IsHeld);
+            Assert.False(contender.IsHeld);
 
             await lockKey.Release();
+            Assert.False(lockKey.IsHeld);
+            Assert.False(contender.IsHeld);
 
-            await contender.Acquire();
+            while (contender.IsHeld == false)
+            {
+                try
+                {
+                    await contender.Acquire();
+                    Assert.False(lockKey.IsHeld);
+                    Assert.True(contender.IsHeld);
+                }
+                catch (LockMaxAttemptsReachedException)
+                {
+                    // Ignore because lock delay might be in effect.
+                }
+            }
+
             await contender.Release();
             await contender.Destroy();
         }
@@ -119,15 +202,13 @@ namespace Consul.Test
             var sessionId = await client.Session.Create(new SessionEntry { Behavior = SessionBehavior.Delete });
 
             var l = await client.AcquireLock(new LockOptions(keyName) { Session = sessionId.Response }, CancellationToken.None);
-            try
-            {
-                Assert.True(l.IsHeld);
-                await client.Session.Destroy(sessionId.Response);
-            }
-            finally
-            {
-                await l.Release();
-            }
+
+            Assert.True(l.IsHeld);
+            await client.Session.Destroy(sessionId.Response);
+
+            await Task.Delay(TimeSpan.FromSeconds(1));
+
+            Assert.False(l.IsHeld);
             Assert.Null((await client.KV.Get(keyName)).Response);
         }
 
@@ -143,7 +224,8 @@ namespace Consul.Test
             {
                 Assert.True(l.IsHeld);
             }
-            finally {
+            finally
+            {
                 await l.Release();
             }
         }
@@ -174,8 +256,13 @@ namespace Consul.Test
 
             Assert.True(l.IsHeld);
 
-            // Wait for multiple renewal cycles to ensure the lock session stays renewed.
-            Task.Delay(TimeSpan.FromSeconds(60)).Wait();
+            // Wait for multiple renewal cycles to ensure the semaphore session stays renewed.
+            for (int i = 0; i < 60; i++)
+            {
+                await Task.Delay(1000);
+                Assert.True(l.IsHeld);
+            }
+
             Assert.True(l.IsHeld);
 
             await l.Release();
@@ -201,11 +288,12 @@ namespace Consul.Test
                 for (var i = 0; i < contenderPool; i++)
                 {
                     var v = i;
+                    acquired[v] = false;
                     tasks.Add(Task.Run(async () =>
                     {
                         var lockKey = client.CreateLock(keyName);
                         await lockKey.Acquire(CancellationToken.None);
-                        Assert.True(acquired.TryAdd(v, lockKey.IsHeld));
+                        acquired[v] = lockKey.IsHeld;
                         if (lockKey.IsHeld)
                         {
                             await Task.Delay(1000);
@@ -219,14 +307,7 @@ namespace Consul.Test
 
             for (var i = 0; i < contenderPool; i++)
             {
-                if (acquired[i])
-                {
-                    Assert.True(acquired[i]);
-                }
-                else
-                {
-                    Assert.True(false, "Contender " + i.ToString() + " did not acquire the lock");
-                }
+                Assert.True(acquired[i], "Contender " + i.ToString() + " did not acquire the lock");
             }
         }
         [Fact]
@@ -324,7 +405,7 @@ namespace Consul.Test
         {
             var client = new ConsulClient();
 
-            const string keyName = "test/lock/contendlockdelay";
+            const string keyName = "test/lock/destroy";
 
             var lockKey = client.CreateLock(keyName);
 
@@ -437,11 +518,9 @@ namespace Consul.Test
                     Assert.True(lock1.IsHeld);
                     if (lock1.IsHeld)
                     {
-                        Task.WaitAny(new[] { Task.Run(() =>
-                    {
-                        lock2.Acquire(CancellationToken.None);
-                        Assert.True(lock2.IsHeld);
-                    }) }, 1000);
+                        Assert.NotEqual(WaitHandle.WaitTimeout, Task.WaitAny(new[] {
+                            Task.Run(() => { lock2.Acquire(CancellationToken.None); Assert.True(lock2.IsHeld); }) },
+                            1000));
                     }
                 }
                 finally
@@ -450,31 +529,25 @@ namespace Consul.Test
                 }
 
                 var lockCheck = new[]
-            {
-                Task.Run(() =>
                 {
-                    while (lock1.IsHeld)
+                    Task.Run(() =>
                     {
-                        Thread.Sleep(10);
-                    }
-                }),
-                Task.Run(() =>
-                {
-                    while (lock2.IsHeld)
+                        while (lock1.IsHeld) { }
+                    }),
+                    Task.Run(() =>
                     {
-                        Thread.Sleep(10);
-                    }
-                })
-            };
+                        while (lock2.IsHeld) { }
+                    })
+                };
 
-                Task.WaitAll(lockCheck, 1000);
+                Assert.True(Task.WaitAll(lockCheck, 1000));
 
-                Assert.False(lock1.IsHeld);
-                Assert.False(lock2.IsHeld);
+                Assert.False(lock1.IsHeld, "Lock 1 still held");
+                Assert.False(lock2.IsHeld, "Lock 2 still held");
             }
             finally
             {
-                Assert.True((await client.Session.Destroy(sessionId)).Response);
+                Assert.True((await client.Session.Destroy(sessionId)).Response, "Failed to destroy session");
             }
         }
 

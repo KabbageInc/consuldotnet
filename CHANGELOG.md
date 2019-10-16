@@ -1,17 +1,101 @@
 # Changelog
 
-## BREAKING CHANGES FOR 0.6.x
-* ___THE ENTIRE CLIENT HAS BEEN REWRITTEN TO BE ASYNC___. This means
-  that any sync calls will need to be reworked to either call the Async
-  API with `GetAwaiter().GetResult()` or, better yet, the calling method
-  needs to be `async` as well and then simply `await` the call.
-* The `Client` class has been renamed `ConsulClient`. The interface
-  remains the same - `IConsulClient`.
-* The `ConsulClientConfiguration` class no longer accepts a string
-  `Address` property to the Consul server. It is now a `System.Uri`
-  named `Address`.
-* `ConsulClient` is now `IDisposable` and should have `Dispose()` called to
-  clean it up. It is still supposed to be used in a long-lived fashion, though.
+## Major Changes between 0.6.4.7 and 0.7.0
+* The method of configuring the ConsulClient has been reworked. It now
+  uses `Action`s to configure the options inside itself - e.g.
+  `var client = new ConsulClient((cfg) => { cfg.Datacenter = "us-west-2"; }`
+  See the file `Consul.Test/ClientTest.cs` and the test method
+  `Client_Constructors()` for more examples. The old method will work
+  but has been made Obsolete.
+* The `ExecuteAbortableLocked` method has been removed.
+* Requests to use the `X-Consul-Token` header instead of the `?token=`
+  query parameter. This may break use of ACLs with very old Consuls (<
+  0.6.0). Please file an issue if this breaks for you.
+
+## 2017-01-17
+* Fixed up a few leaking tasks in Sessions, Locks and Semaphores, as well as
+  properly waiting for the previously-leaked tasks to complete.
+  Also made some tasks Long Running in the TPL sense.
+
+## 2017-01-03 (0.7.2.0)
+* New APIs ported:
+  * Snapshot API. Requires >= Consul 0.7.1 to use.
+  * Keyring API. Requires >= Consul 0.7.2 to use.
+  * Agent Leave/Reload APIs. Requires >= Consul 0.7.2 to use.
+* Added `TLSSkipVerify` and `DeregisterCriticalServiceAfter` to the
+  AgentServiceCheck class. Requires >= Consul 0.7.0 to use.
+* Added `Health.AggregatedStatus()` extension method to any
+  `IEnumerable<HealthCheck>` to roll up a set of checks. Can be used
+  with any version of Consul.
+* Renamed `CheckStatus` to `HealthStatus`. This affects the
+  `AgentServiceCheck` and `AgentCheck` classes.
+* Changed the `Health.HealthCheck` `Status` field to be of type
+  `HealthStatus` instead of `string`.
+
+## 2016-12-29 (0.7.0.5)
+* Added missing nuget info to project.json. Thanks @latop2604!
+
+## 2016-12-20
+* Added a couple missing interfaces to IConsulClient. Thanks
+  @chrishoffman!
+
+## 2016-11-02
+* Cleaned up a few minor logic errors and made disposal of internally-used
+  `CancellationTokenSources` a lot more explicit instead of leaking them.
+
+## 2016-10-10
+* Revert inadvertent upgrade to .NET 4.5.1.
+
+## 2016-09-21
+* Fixed a variety of bugs that could cause sessions to be destroyed if provided
+  to a Lock or Semaphore via a `LockOptions` or `SemaphoreOptions` object.
+
+## 2016-08-17
+* Ported in changes from the Consul Go API for 0.7.0. Most of these
+  require 0.7.0 servers/agents. The changes are:
+  * Atomic transactions for the KV store
+  * Only retry locks/semaphores on Consul errors, not on all errors
+  * Add the `Near` property to Prepared Queries
+  * Add Query Templates to Prepared Queries, with regex filtering
+  * Change all requests to use the `X-Consul-Token` header instead of
+    the `?token=` query parameter.
+  * Add the ability to deregister a service that has been critical for
+    an arbitrary period of time.
+  * Signal WAN address translation and add the ability to look up
+    the WAN and LAN addresses if address translation is being used.
+  * Added Operator API to allow Raft editing.
+
+## 2016-08-03
+* Added the ability to set `LockOpts.LockRetryTime`. Thanks @pfrejlich!
+
+## 2016-07-10
+* Add an optional CancellationToken parameter to every method that ends up
+  doing an HTTP request. Some of these can create an unstable Consul state
+  (e.g.  allowing the release of a distribted Semaphore to be canceled) but in
+  many cases they should only be used if the call can possibly fail and a
+  secondary timeout is needed.
+
+## 2016-07-07
+* Add .NET Core port and build process thanks to work by @akatz0813.
+* Converted all Locks and Semaphores to be totally `async` thanks to
+  work by @mjgoethe.
+* Entirely removed the method `ExecuteAbortableLocked` and all
+  functionality around aborting a thread based on a Consul lock.
+* Reworked configuration of the `ConsulClient` to use `Action<T>` to
+  configure options.
+
+## 2016-06-10
+* Correct the behavior of `LockTryOnce/SemaphoreTryOnce` so that it now
+  properly waits one multiple of the WaitTime before exiting in case of it
+  already being held.
+
+## 2016-05-27
+* Disable Client Certificates on Mono since the certificate handler is
+  not implemented at the Mono library level.
+
+## 2016-05-24
+* Added missing CancellationToken overrides to allow long polling for
+  `Catalog.Node()` and `Catalog.Service()`.
 
 ## 2016-05-16
 * Fixed configuration reuse between multiple clients so multiple

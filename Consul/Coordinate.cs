@@ -16,7 +16,9 @@
 //  </copyright>
 // -----------------------------------------------------------------------
 
+using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Consul
@@ -63,18 +65,18 @@ namespace Consul
         /// Datacenters is used to return the coordinates of all the servers in the WAN pool.
         /// </summary>
         /// <returns>A query result containing a map of datacenters, each with a list of coordinates of all the servers in the WAN pool</returns>
-        public Task<QueryResult<CoordinateDatacenterMap[]>> Datacenters()
+        public Task<QueryResult<CoordinateDatacenterMap[]>> Datacenters(CancellationToken ct = default(CancellationToken))
         {
-            return _client.Get<CoordinateDatacenterMap[]>(string.Format("/v1/coordinate/datacenters")).Execute();
+            return _client.Get<CoordinateDatacenterMap[]>(string.Format("/v1/coordinate/datacenters")).Execute(ct);
         }
 
         /// <summary>
         /// Nodes is used to return the coordinates of all the nodes in the LAN pool.
         /// </summary>
         /// <returns>A query result containing coordinates of all the nodes in the LAN pool</returns>
-        public Task<QueryResult<CoordinateEntry[]>> Nodes()
+        public Task<QueryResult<CoordinateEntry[]>> Nodes(CancellationToken ct = default(CancellationToken))
         {
-            return Nodes(QueryOptions.Default);
+            return Nodes(QueryOptions.Default, ct);
         }
 
         /// <summary>
@@ -82,35 +84,22 @@ namespace Consul
         /// </summary>
         /// <param name="q">Customized query options</param>
         /// <returns>A query result containing coordinates of all the nodes in the LAN pool</returns>
-        public Task<QueryResult<CoordinateEntry[]>> Nodes(QueryOptions q)
+        public Task<QueryResult<CoordinateEntry[]>> Nodes(QueryOptions q, CancellationToken ct = default(CancellationToken))
         {
-            return _client.Get<CoordinateEntry[]>(string.Format("/v1/coordinate/nodes"), q).Execute();
+            return _client.Get<CoordinateEntry[]>(string.Format("/v1/coordinate/nodes"), q).Execute(ct);
         }
     }
 
     public partial class ConsulClient : IConsulClient
     {
-        private Coordinate _coordinate;
+        private Lazy<Coordinate> _coordinate;
 
         /// <summary>
         /// Session returns a handle to the session endpoints
         /// </summary>
         public ICoordinateEndpoint Coordinate
         {
-            get
-            {
-                if (_coordinate == null)
-                {
-                    lock (_lock)
-                    {
-                        if (_coordinate == null)
-                        {
-                            _coordinate = new Coordinate(this);
-                        }
-                    }
-                }
-                return _coordinate;
-            }
+            get { return _coordinate.Value; }
         }
     }
 }
