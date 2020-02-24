@@ -362,8 +362,6 @@ namespace Consul
                     }
                     IsHeld = false;
 
-                    DisposeCancellationTokenSource();
-
                     var lockEnt = LockEntry(LockSession);
 
                     await _client.KV.Release(lockEnt, ct).ConfigureAwait(false);
@@ -371,6 +369,8 @@ namespace Consul
             }
             finally
             {
+                DisposeCancellationTokenSource();
+
                 if (_sessionRenewTask != null)
                 {
                     try
