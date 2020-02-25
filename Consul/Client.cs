@@ -10,56 +10,29 @@ using System.Threading.Tasks;
 using System.Net.Http.Headers;
 using System.Linq;
 using System.Security.Cryptography.X509Certificates;
-#if !(CORECLR || PORTABLE || PORTABLE40)
-using System.Security.Permissions;
-using System.Runtime.Serialization;
-#endif
+
 
 namespace Consul
 {
     /// <summary>
     /// Represents errors that occur while sending data to or fetching data from the Consul agent.
     /// </summary>
-#if !(CORECLR || PORTABLE || PORTABLE40)
-    [Serializable]
-#endif
     public class ConsulRequestException : Exception
     {
         public HttpStatusCode StatusCode { get; set; }
         public ConsulRequestException() { }
         public ConsulRequestException(string message, HttpStatusCode statusCode) : base(message) { StatusCode = statusCode; }
         public ConsulRequestException(string message, HttpStatusCode statusCode, Exception inner) : base(message, inner) { StatusCode = statusCode; }
-#if !(CORECLR || PORTABLE || PORTABLE40)
-        protected ConsulRequestException(
-          SerializationInfo info,
-          StreamingContext context) : base(info, context) { }
-
-        [SecurityPermission(SecurityAction.Demand, SerializationFormatter = true)]
-        public override void GetObjectData(SerializationInfo info, StreamingContext context)
-        {
-            base.GetObjectData(info, context);
-
-            info.AddValue("StatusCode", StatusCode);
-        }
-#endif
     }
 
     /// <summary>
     /// Represents errors that occur during initalization of the Consul client's configuration.
     /// </summary>
-#if !(CORECLR || PORTABLE || PORTABLE40)
-    [Serializable]
-#endif
     public class ConsulConfigurationException : Exception
     {
         public ConsulConfigurationException() { }
         public ConsulConfigurationException(string message) : base(message) { }
         public ConsulConfigurationException(string message, Exception inner) : base(message, inner) { }
-#if !(CORECLR || PORTABLE || PORTABLE40)
-        protected ConsulConfigurationException(
-          System.Runtime.Serialization.SerializationInfo info,
-          System.Runtime.Serialization.StreamingContext context) : base(info, context) { }
-#endif
     }
 
     /// <summary>
@@ -73,17 +46,12 @@ namespace Consul
 
         internal event EventHandler Updated;
 
-        internal static Lazy<bool> _clientCertSupport = new Lazy<bool>(() => { return Type.GetType("Mono.Runtime") == null; });
+        internal static Lazy<bool> _clientCertSupport = new Lazy<bool>(() => Type.GetType("Mono.Runtime") == null);
 
-        internal bool ClientCertificateSupported { get { return _clientCertSupport.Value; } }
+        internal bool ClientCertificateSupported => _clientCertSupport.Value;
 
-#if CORECLR
         [Obsolete("Use of DisableServerCertificateValidation should be converted to setting the HttpHandler's ServerCertificateCustomValidationCallback in the ConsulClient constructor" +
-            "This property will be removed when 0.8.0 is released.", false)]
-#else
-        [Obsolete("Use of DisableServerCertificateValidation should be converted to setting the WebRequestHandler's ServerCertificateValidationCallback in the ConsulClient constructor" +
-            "This property will be removed when 0.8.0 is released.", false)]
-#endif
+                  "This property will be removed when 0.8.0 is released.", false)]
         internal bool DisableServerCertificateValidation
         {
             get
@@ -111,13 +79,8 @@ namespace Consul
         /// Credentials to use for access to the HTTP API.
         /// This is only needed if an authenticating service exists in front of Consul; Token is used for ACL authentication by Consul.
         /// </summary>
-#if CORECLR
         [Obsolete("Use of HttpAuth should be converted to setting the HttpHandler's Credential property in the ConsulClient constructor" +
-            "This property will be removed when 0.8.0 is released.", false)]
-#else
-        [Obsolete("Use of HttpAuth should be converted to setting the WebRequestHandler's Credential property in the ConsulClient constructor" +
-            "This property will be removed when 0.8.0 is released.", false)]
-#endif
+                  "This property will be removed when 0.8.0 is released.", false)]
         public NetworkCredential HttpAuth
         {
             internal get
@@ -136,15 +99,8 @@ namespace Consul
         /// This is only needed if an authenticating service exists in front of Consul; Token is used for ACL authentication by Consul. This is not the same as RPC Encryption with TLS certificates.
         /// </summary>
         /// <exception cref="PlatformNotSupportedException">Setting this property will throw a PlatformNotSupportedException on Mono</exception>
-#if __MonoCS__
-        [Obsolete("Client Certificates are not implemented in Mono", true)]
-#elif CORECLR
         [Obsolete("Use of ClientCertificate should be converted to adding to the HttpHandler's ClientCertificates list in the ConsulClient constructor." +
-            "This property will be removed when 0.8.0 is released.", false)]
-#else
-        [Obsolete("Use of ClientCertificate should be converted to adding to the WebRequestHandler's ClientCertificates list in the ConsulClient constructor." +
-            "This property will be removed when 0.8.0 is released.", false)]
-#endif
+                  "This property will be removed when 0.8.0 is released.", false)]
         public X509Certificate2 ClientCertificate
         {
             internal get
@@ -484,24 +440,15 @@ namespace Consul
         /// </summary>
         private class ConsulClientConfigurationContainer
         {
-
             internal readonly bool skipClientDispose;
             internal readonly HttpClient HttpClient;
-#if CORECLR
             internal readonly HttpClientHandler HttpHandler;
-#else
-            internal readonly WebRequestHandler HttpHandler;
-#endif
             public readonly ConsulClientConfiguration Config;
 
             public ConsulClientConfigurationContainer()
             {
                 Config = new ConsulClientConfiguration();
-#if CORECLR
                 HttpHandler = new HttpClientHandler();
-#else
-                HttpHandler = new WebRequestHandler();
-#endif
                 HttpClient = new HttpClient(HttpHandler);
                 HttpClient.Timeout = TimeSpan.FromMinutes(15);
                 HttpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -519,11 +466,7 @@ namespace Consul
             public ConsulClientConfigurationContainer(ConsulClientConfiguration config)
             {
                 Config = config;
-#if CORECLR
                 HttpHandler = new HttpClientHandler();
-#else
-                HttpHandler = new WebRequestHandler();
-#endif
                 HttpClient = new HttpClient(HttpHandler);
                 HttpClient.Timeout = TimeSpan.FromMinutes(15);
                 HttpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -532,7 +475,7 @@ namespace Consul
             #endregion
 
             #region IDisposable Support
-            private bool disposedValue = false; // To detect redundant calls
+            private bool disposedValue; // To detect redundant calls
 
             protected virtual void Dispose(bool disposing)
             {
@@ -544,21 +487,13 @@ namespace Consul
                         {
                             HttpClient.Dispose();
                         }
-                        if (HttpHandler != null)
-                        {
-                            HttpHandler.Dispose();
-                        }
+
+                        HttpHandler?.Dispose();
                     }
 
                     disposedValue = true;
                 }
             }
-
-            //~ConsulClient()
-            //{
-            //    // Do not change this code. Put cleanup code in Dispose(bool disposing) above.
-            //    Dispose(false);
-            //}
 
             // This code added to correctly implement the disposable pattern.
             public void Dispose()
@@ -572,7 +507,7 @@ namespace Consul
             {
                 if (disposedValue)
                 {
-                    throw new ObjectDisposedException(typeof(ConsulClientConfigurationContainer).FullName.ToString());
+                    throw new ObjectDisposedException(typeof(ConsulClientConfigurationContainer).FullName);
                 }
             }
             #endregion
@@ -580,13 +515,11 @@ namespace Consul
 
         private ConsulClientConfigurationContainer ConfigContainer;
 
-        internal HttpClient HttpClient { get { return ConfigContainer.HttpClient; } }
-#if CORECLR
-        internal HttpClientHandler HttpHandler { get { return ConfigContainer.HttpHandler; } }
-#else
-        internal WebRequestHandler HttpHandler { get { return ConfigContainer.HttpHandler; } }
-#endif
-        public ConsulClientConfiguration Config { get { return ConfigContainer.Config; } }
+        internal HttpClient HttpClient => ConfigContainer.HttpClient;
+
+        internal HttpClientHandler HttpHandler => ConfigContainer.HttpHandler;
+
+        public ConsulClientConfiguration Config => ConfigContainer.Config;
 
         internal readonly JsonSerializer serializer = new JsonSerializer();
 
@@ -620,11 +553,7 @@ namespace Consul
         /// <param name="configOverride">The Action to modify the default configuration with</param>
         /// <param name="clientOverride">The Action to modify the HttpClient with</param>
         /// <param name="handlerOverride">The Action to modify the WebRequestHandler with</param>
-#if !CORECLR
-        public ConsulClient(Action<ConsulClientConfiguration> configOverride, Action<HttpClient> clientOverride, Action<WebRequestHandler> handlerOverride)
-#else
         public ConsulClient(Action<ConsulClientConfiguration> configOverride, Action<HttpClient> clientOverride, Action<HttpClientHandler> handlerOverride)
-#endif
         {
             var ctr = new ConsulClientConfigurationContainer();
 
@@ -694,7 +623,7 @@ namespace Consul
         }
 
         #region IDisposable Support
-        private bool disposedValue = false; // To detect redundant calls
+        private bool disposedValue; // To detect redundant calls
 
         protected virtual void Dispose(bool disposing)
         {
@@ -703,21 +632,12 @@ namespace Consul
                 if (disposing)
                 {
                     Config.Updated -= HandleConfigUpdateEvent;
-                    if (ConfigContainer != null)
-                    {
-                        ConfigContainer.Dispose();
-                    }
+                    ConfigContainer?.Dispose();
                 }
 
                 disposedValue = true;
             }
         }
-
-        //~ConsulClient()
-        //{
-        //    // Do not change this code. Put cleanup code in Dispose(bool disposing) above.
-        //    Dispose(false);
-        //}
 
         // This code added to correctly implement the disposable pattern.
         public void Dispose()
@@ -731,7 +651,7 @@ namespace Consul
         {
             if (disposedValue)
             {
-                throw new ObjectDisposedException(typeof(ConsulClient).FullName.ToString());
+                throw new ObjectDisposedException(typeof(ConsulClient).FullName);
             }
         }
         #endregion
@@ -739,13 +659,9 @@ namespace Consul
         void HandleConfigUpdateEvent(object sender, EventArgs e)
         {
             ApplyConfig(sender as ConsulClientConfiguration, HttpHandler, HttpClient);
-
         }
-#if !CORECLR
-        void ApplyConfig(ConsulClientConfiguration config, WebRequestHandler handler, HttpClient client)
-#else
+
         void ApplyConfig(ConsulClientConfiguration config, HttpClientHandler handler, HttpClient client)
-#endif        
         {
 #pragma warning disable CS0618 // Type or member is obsolete
             if (config.HttpAuth != null)
@@ -755,7 +671,7 @@ namespace Consul
                 handler.Credentials = config.HttpAuth;
 #pragma warning restore CS0618 // Type or member is obsolete
             }
-#if !__MonoCS__
+
             if (config.ClientCertificateSupported)
             {
 #pragma warning disable CS0618 // Type or member is obsolete
@@ -773,19 +689,7 @@ namespace Consul
                     handler.ClientCertificates.Clear();
                 }
             }
-#endif
-#if !CORECLR
-#pragma warning disable CS0618 // Type or member is obsolete
-            if (config.DisableServerCertificateValidation)
-#pragma warning restore CS0618 // Type or member is obsolete
-            {
-                handler.ServerCertificateValidationCallback += (certSender, cert, chain, sslPolicyErrors) => { return true; };
-            }
-            else
-            {
-                handler.ServerCertificateValidationCallback = null;
-            }
-#else
+            
 #pragma warning disable CS0618 // Type or member is obsolete
             if (config.DisableServerCertificateValidation)
 #pragma warning restore CS0618 // Type or member is obsolete
@@ -796,7 +700,6 @@ namespace Consul
             {
                 handler.ServerCertificateCustomValidationCallback = null;
             }
-#endif
 
             if (!string.IsNullOrEmpty(config.Token))
             {
@@ -962,13 +865,12 @@ namespace Consul
             {
                 if (ResponseStream == null)
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode), response.StatusCode);
+                    throw new ConsulRequestException($"Unexpected response, status code {response.StatusCode}", response.StatusCode);
                 }
                 using (var sr = new StreamReader(ResponseStream))
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
+                    throw new ConsulRequestException(
+                        $"Unexpected response, status code {response.StatusCode}: {sr.ReadToEnd()}", response.StatusCode);
                 }
             }
 
@@ -1001,8 +903,7 @@ namespace Consul
 
             if (response.StatusCode != HttpStatusCode.NotFound && !response.IsSuccessStatusCode)
             {
-                throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                    response.StatusCode), response.StatusCode);
+                throw new ConsulRequestException($"Unexpected response, status code {response.StatusCode}", response.StatusCode);
             }
 
             result.RequestTime = timer.Elapsed;
@@ -1140,13 +1041,12 @@ namespace Consul
             {
                 if (ResponseStream == null)
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode), response.StatusCode);
+                    throw new ConsulRequestException($"Unexpected response, status code {response.StatusCode}", response.StatusCode);
                 }
                 using (var sr = new StreamReader(ResponseStream))
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
+                    throw new ConsulRequestException(
+                        $"Unexpected response, status code {response.StatusCode}: {sr.ReadToEnd()}", response.StatusCode);
                 }
             }
 
@@ -1214,13 +1114,12 @@ namespace Consul
             {
                 if (ResponseStream == null)
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode), response.StatusCode);
+                    throw new ConsulRequestException($"Unexpected response, status code {response.StatusCode}", response.StatusCode);
                 }
                 using (var sr = new StreamReader(ResponseStream))
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
+                    throw new ConsulRequestException(
+                        $"Unexpected response, status code {response.StatusCode}: {sr.ReadToEnd()}", response.StatusCode);
                 }
             }
 
@@ -1301,13 +1200,12 @@ namespace Consul
             {
                 if (ResponseStream == null)
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode), response.StatusCode);
+                    throw new ConsulRequestException($"Unexpected response, status code {response.StatusCode}", response.StatusCode);
                 }
                 using (var sr = new StreamReader(ResponseStream))
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
+                    throw new ConsulRequestException(
+                        $"Unexpected response, status code {response.StatusCode}: {sr.ReadToEnd()}", response.StatusCode);
                 }
             }
 
@@ -1370,13 +1268,12 @@ namespace Consul
             {
                 if (ResponseStream == null)
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode), response.StatusCode);
+                    throw new ConsulRequestException($"Unexpected response, status code {response.StatusCode}", response.StatusCode);
                 }
                 using (var sr = new StreamReader(ResponseStream))
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
+                    throw new ConsulRequestException(
+                        $"Unexpected response, status code {response.StatusCode}: {sr.ReadToEnd()}", response.StatusCode);
                 }
             }
 
@@ -1444,13 +1341,12 @@ namespace Consul
             {
                 if (ResponseStream == null)
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode), response.StatusCode);
+                    throw new ConsulRequestException($"Unexpected response, status code {response.StatusCode}", response.StatusCode);
                 }
                 using (var sr = new StreamReader(ResponseStream))
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
+                    throw new ConsulRequestException(
+                        $"Unexpected response, status code {response.StatusCode}: {sr.ReadToEnd()}", response.StatusCode);
                 }
             }
 
@@ -1532,13 +1428,12 @@ namespace Consul
             {
                 if (ResponseStream == null)
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode), response.StatusCode);
+                    throw new ConsulRequestException($"Unexpected response, status code {response.StatusCode}", response.StatusCode);
                 }
                 using (var sr = new StreamReader(ResponseStream))
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
+                    throw new ConsulRequestException(
+                        $"Unexpected response, status code {response.StatusCode}: {sr.ReadToEnd()}", response.StatusCode);
                 }
             }
 
@@ -1622,13 +1517,12 @@ namespace Consul
             {
                 if (ResponseStream == null)
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode), response.StatusCode);
+                    throw new ConsulRequestException($"Unexpected response, status code {response.StatusCode}", response.StatusCode);
                 }
                 using (var sr = new StreamReader(ResponseStream))
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
+                    throw new ConsulRequestException(
+                        $"Unexpected response, status code {response.StatusCode}: {sr.ReadToEnd()}", response.StatusCode);
                 }
             }
 
@@ -1717,13 +1611,12 @@ namespace Consul
             {
                 if (ResponseStream == null)
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode), response.StatusCode);
+                    throw new ConsulRequestException($"Unexpected response, status code {response.StatusCode}", response.StatusCode);
                 }
                 using (var sr = new StreamReader(ResponseStream))
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
+                    throw new ConsulRequestException(
+                        $"Unexpected response, status code {response.StatusCode}: {sr.ReadToEnd()}", response.StatusCode);
                 }
             }
 
@@ -1805,13 +1698,12 @@ namespace Consul
             {
                 if (ResponseStream == null)
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}",
-                        response.StatusCode), response.StatusCode);
+                    throw new ConsulRequestException($"Unexpected response, status code {response.StatusCode}", response.StatusCode);
                 }
                 using (var sr = new StreamReader(ResponseStream))
                 {
-                    throw new ConsulRequestException(string.Format("Unexpected response, status code {0}: {1}",
-                        response.StatusCode, sr.ReadToEnd()), response.StatusCode);
+                    throw new ConsulRequestException(
+                        $"Unexpected response, status code {response.StatusCode}: {sr.ReadToEnd()}", response.StatusCode);
                 }
             }
 
