@@ -44,7 +44,7 @@ namespace Consul.Test
 
             var mgmtquerytoken = new QueryOptions() { Token = "yep" };
 
-            var def = new PreparedQueryDefinition { Service = new ServiceQuery() { Service = "sql" } };
+            var def = new PreparedQueryDefinition { Name = "derp", Service = new ServiceQuery() { Service = "sql" } };
 
             var id = (await client.PreparedQuery.Create(def)).Response;
             def.ID = id;
@@ -54,8 +54,7 @@ namespace Consul.Test
             Assert.NotNull(defs);
             Assert.True(defs.Length == 1);
             Assert.Equal(def.Service.Service, defs[0].Service.Service);
-
-            defs = null;
+            
             defs = (await client.PreparedQuery.List(mgmtquerytoken)).Response;
 
             Assert.NotNull(defs);
@@ -65,8 +64,7 @@ namespace Consul.Test
             def.Name = "my-query";
 
             await client.PreparedQuery.Update(def);
-
-            defs = null;
+            
             defs = (await client.PreparedQuery.Get(id)).Response;
 
             Assert.NotNull(defs);
@@ -79,8 +77,7 @@ namespace Consul.Test
             var nodes = results.Nodes.Where(n => n.Node.Name == "foobaz").ToArray();
             Assert.True(nodes.Length == 1);
             Assert.Equal(nodes[0].Node.Name, "foobaz");
-
-            results = null;
+            
             results = (await client.PreparedQuery.Execute("my-query")).Response;
 
             Assert.NotNull(results);
@@ -89,8 +86,7 @@ namespace Consul.Test
             Assert.Equal(results.Nodes[0].Node.Name, "foobaz");
 
             await client.PreparedQuery.Delete(id);
-
-            defs = null;
+            
             defs = (await client.PreparedQuery.List(mgmtquerytoken)).Response;
 
             Assert.True(defs.Length == 0);

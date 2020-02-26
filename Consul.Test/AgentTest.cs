@@ -351,7 +351,7 @@ namespace Consul.Test
                     Name = "redischeck",
                     ServiceID = svcID,
                     DockerContainerID = "f972c95ebf0e",
-                    Script = "/bin/true",
+                    ScriptArgs = new[] {"/bin/true"},
                     Shell = "/bin/bash",
                     Interval = TimeSpan.FromSeconds(10)
                 };
@@ -419,7 +419,7 @@ namespace Consul.Test
         {
             var client = new ConsulClient();
             var info = await client.Agent.Self();
-            await client.Agent.Join(info.Response["Config"]["AdvertiseAddr"], false);
+            await client.Agent.Join(info.Response["Member"]["Addr"], false);
             // Success is not throwing an exception
         }
 

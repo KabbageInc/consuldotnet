@@ -53,15 +53,8 @@ namespace Consul.Test
             Environment.SetEnvironmentVariable("CONSUL_HTTP_SSL", string.Empty);
             Environment.SetEnvironmentVariable("CONSUL_HTTP_SSL_VERIFY", string.Empty);
 
-
-#if !CORECLR
-            Assert.True((client.HttpHandler as WebRequestHandler).ServerCertificateValidationCallback(null, null, null,
-                SslPolicyErrors.RemoteCertificateChainErrors));
-            ServicePointManager.ServerCertificateValidationCallback = null;
-#else
             Assert.True((client.HttpHandler as HttpClientHandler).ServerCertificateCustomValidationCallback(null, null, null,
                 SslPolicyErrors.RemoteCertificateChainErrors));
-#endif
 
             Assert.NotNull(client);
         }
@@ -172,10 +165,6 @@ namespace Consul.Test
 #pragma warning restore CS0618 // Type or member is obsolete
                 await client.KV.Put(new KVPair("kv/reuseconfig") { Flags = 1000 });
                 Assert.Equal<ulong>(1000, (await client.KV.Get("kv/reuseconfig")).Response.Flags);
-#if !CORECLR
-                Assert.True(client.HttpHandler.ServerCertificateValidationCallback(null, null, null,
-                    SslPolicyErrors.RemoteCertificateChainErrors));
-#endif
             }
 
 #pragma warning disable CS0618 // Type or member is obsolete
@@ -187,9 +176,6 @@ namespace Consul.Test
 #pragma warning restore CS0618 // Type or member is obsolete
                 await client.KV.Put(new KVPair("kv/reuseconfig") { Flags = 2000 });
                 Assert.Equal<ulong>(2000, (await client.KV.Get("kv/reuseconfig")).Response.Flags);
-#if !CORECLR
-                Assert.Null(client.HttpHandler.ServerCertificateValidationCallback);
-#endif
             }
 
 #pragma warning disable CS0618 // Type or member is obsolete
@@ -230,20 +216,6 @@ namespace Consul.Test
                 Assert.Equal("foo", c.Config.Datacenter);
                 Assert.Equal(TimeSpan.FromSeconds(30), c.HttpClient.Timeout);
             }
-
-#if !CORECLR
-            using (var c = new ConsulClient(cfgAction,
-                (client) => { client.Timeout = TimeSpan.FromSeconds(30); },
-                (handler) => { handler.Proxy = new WebProxy("127.0.0.1", 8080); }))
-            {
-                Assert.NotNull(c.Config);
-                Assert.NotNull(c.HttpHandler);
-                Assert.NotNull(c.HttpClient);
-                Assert.Equal("foo", c.Config.Datacenter);
-                Assert.Equal(TimeSpan.FromSeconds(30), c.HttpClient.Timeout);
-                Assert.NotNull(c.HttpHandler.Proxy);
-            }
-#endif
         }
     }
 }
