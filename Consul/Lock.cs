@@ -5,9 +5,6 @@ using System.Threading.Tasks;
 
 namespace Consul
 {
-#if !(CORECLR || PORTABLE || PORTABLE40)
-    [Serializable]
-#endif
     public class LockHeldException : Exception
     {
         public LockHeldException()
@@ -23,15 +20,8 @@ namespace Consul
             : base(message, inner)
         {
         }
-#if !(CORECLR || PORTABLE || PORTABLE40)
-        protected LockHeldException(
-          SerializationInfo info,
-          StreamingContext context) : base(info, context) { }
-#endif
     }
-#if !(CORECLR || PORTABLE || PORTABLE40)
-    [Serializable]
-#endif
+    
     public class LockNotHeldException : Exception
     {
         public LockNotHeldException()
@@ -47,15 +37,8 @@ namespace Consul
             : base(message, inner)
         {
         }
-#if !(CORECLR || PORTABLE || PORTABLE40)
-        protected LockNotHeldException(
-          SerializationInfo info,
-          StreamingContext context) : base(info, context) { }
-#endif
     }
-#if !(CORECLR || PORTABLE || PORTABLE40)
-    [Serializable]
-#endif
+    
     public class LockInUseException : Exception
     {
         public LockInUseException()
@@ -71,15 +54,8 @@ namespace Consul
             : base(message, inner)
         {
         }
-#if !(CORECLR || PORTABLE || PORTABLE40)
-        protected LockInUseException(
-          SerializationInfo info,
-          StreamingContext context) : base(info, context) { }
-#endif
     }
-#if !(CORECLR || PORTABLE || PORTABLE40)
-    [Serializable]
-#endif
+    
     public class LockConflictException : Exception
     {
         public LockConflictException()
@@ -95,25 +71,13 @@ namespace Consul
             : base(message, inner)
         {
         }
-#if !(CORECLR || PORTABLE || PORTABLE40)
-        protected LockConflictException(
-          SerializationInfo info,
-          StreamingContext context) : base(info, context) { }
-#endif
     }
-#if !(CORECLR || PORTABLE || PORTABLE40)
-    [Serializable]
-#endif
+    
     public class LockMaxAttemptsReachedException : Exception
     {
         public LockMaxAttemptsReachedException() { }
         public LockMaxAttemptsReachedException(string message) : base(message) { }
         public LockMaxAttemptsReachedException(string message, Exception inner) : base(message, inner) { }
-#if !(CORECLR || PORTABLE || PORTABLE40)
-        protected LockMaxAttemptsReachedException(
-          SerializationInfo info,
-          StreamingContext context) : base(info, context) { }
-#endif
     }
 
     /// <summary>

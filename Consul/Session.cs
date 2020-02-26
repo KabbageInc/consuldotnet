@@ -70,36 +70,19 @@ namespace Consul
             return objectType == typeof(SessionBehavior);
         }
     }
-
-#if !(CORECLR || PORTABLE || PORTABLE40)
-    [Serializable]
-#endif
+    
     public class SessionExpiredException : Exception
     {
         public SessionExpiredException() { }
         public SessionExpiredException(string message) : base(message) { }
         public SessionExpiredException(string message, Exception inner) : base(message, inner) { }
-#if !(CORECLR || PORTABLE || PORTABLE40)
-        protected SessionExpiredException(
-          SerializationInfo info,
-          StreamingContext context) : base(info, context) { }
-#endif
-
     }
-
-#if !(CORECLR || PORTABLE || PORTABLE40)
-    [Serializable]
-#endif
+    
     public class SessionCreationException : Exception
     {
         public SessionCreationException() { }
         public SessionCreationException(string message) : base(message) { }
         public SessionCreationException(string message, Exception inner) : base(message, inner) { }
-#if !(CORECLR || PORTABLE || PORTABLE40)
-        protected SessionCreationException(
-          SerializationInfo info,
-          StreamingContext context) : base(info, context) { }
-#endif
     }
 
     public class SessionEntry
