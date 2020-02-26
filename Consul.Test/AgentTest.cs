@@ -351,7 +351,7 @@ namespace Consul.Test
                     Name = "redischeck",
                     ServiceID = svcID,
                     DockerContainerID = "f972c95ebf0e",
-                    ScriptArgs = new[] {"/bin/true"},
+                    Args = new[] {"/bin/true"},
                     Shell = "/bin/bash",
                     Interval = TimeSpan.FromSeconds(10)
                 };

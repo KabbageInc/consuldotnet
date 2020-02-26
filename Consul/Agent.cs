@@ -224,7 +224,7 @@ namespace Consul
     public class AgentServiceCheck
     {
         [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
-        public string[] ScriptArgs { get; set; }
+        public string[] Args { get; set; }
 
         [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
         public string DockerContainerID { get; set; }
